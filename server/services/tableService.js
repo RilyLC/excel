@@ -52,7 +52,7 @@ exports.deleteProject = (id, deleteTables = false) => {
     })();
 };
 
-exports.updateTableMeta = (id, { name, projectId }) => {
+exports.updateTableMeta = (id, { name, projectId, columns }) => {
     const updates = [];
     const params = [];
     
@@ -65,6 +65,13 @@ exports.updateTableMeta = (id, { name, projectId }) => {
         updates.push('project_id = ?');
         // Handle explicit null or valid ID
         params.push(projectId === 'null' || projectId === null ? null : projectId);
+    }
+
+    if (columns) {
+        updates.push('columns = ?');
+        // Ensure columns is stringified if it's an object/array
+        const colStr = typeof columns === 'string' ? columns : JSON.stringify(columns);
+        params.push(colStr);
     }
     
     if (updates.length === 0) return { success: true };
@@ -207,7 +214,7 @@ exports.getAllTables = (projectId = null) => {
     }
 };
 
-exports.getTableData = (tableName, page = 1, pageSize = 50, filters = []) => {
+exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts = [], groups = []) => {
     // Verify tableName exists in _app_tables to prevent SQL injection
     const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
     if (!tableExists) {
@@ -215,41 +222,141 @@ exports.getTableData = (tableName, page = 1, pageSize = 50, filters = []) => {
     }
 
     const offset = (page - 1) * pageSize;
-    
-    // Build WHERE clause
-    let whereClause = '';
     const params = [];
 
-    // Simple filters implementation for now
-    // filters format: [{ column: 'Age', operator: '>', value: 20, logic: 'AND' }]
-    if (filters.length > 0) {
-        let sql = '';
-        const conditions = filters.map((f, index) => {
-             // Validate operator to prevent injection
-            const validOps = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'NOT LIKE'];
-            const op = validOps.includes(f.operator) ? f.operator : '=';
+    // --- 1. Build Recursive WHERE Clause ---
+    function buildWhere(filterItem) {
+        // Case 1: Group (has 'items')
+        if (filterItem.items && Array.isArray(filterItem.items) && filterItem.items.length > 0) {
+            const clauses = filterItem.items.map(item => buildWhere(item)).filter(c => c);
+            if (clauses.length === 0) return '';
+            return `(${clauses.join(` ${filterItem.logic || 'AND'} `)})`;
+        }
+        
+        // Case 2: Condition (has 'column')
+        if (filterItem.column) {
+            const validOps = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'NOT LIKE', 'IS EMPTY', 'IS NOT EMPTY'];
+            const op = validOps.includes(filterItem.operator) ? filterItem.operator : '=';
             
-            // Handle LIKE/NOT LIKE specifically
-            if (op === 'LIKE' || op === 'NOT LIKE') {
-                params.push(`%${f.value}%`);
-            } else {
-                params.push(f.value);
+            if (op === 'IS EMPTY') {
+                return `("${filterItem.column}" IS NULL OR "${filterItem.column}" = '')`;
+            }
+            if (op === 'IS NOT EMPTY') {
+               return `("${filterItem.column}" IS NOT NULL AND "${filterItem.column}" != '')`;
             }
 
-            const clause = `"${f.column}" ${op} ?`;
-            
-            // Add logic operator (AND/OR) for all except the first condition
-            if (index > 0) {
-                const logic = (f.logic === 'OR') ? 'OR' : 'AND';
-                return ` ${logic} ${clause}`;
+            if (op === 'LIKE' || op === 'NOT LIKE') {
+                params.push(`%${filterItem.value}%`);
+            } else {
+                params.push(filterItem.value);
             }
-            return clause;
+            return `"${filterItem.column}" ${op} ?`;
+        }
+        
+        return '';
+    }
+
+    let whereClause = '';
+    // Support legacy flat array or new root group object
+    if (Array.isArray(filters)) {
+        if (filters.length > 0) {
+            // Convert flat list to a single AND group for backward compatibility logic
+            // But wait, the flat list had logic props in items. 
+            // Flat list logic: Item 0 (no logic), Item 1 (logic with Item 0), etc.
+            // Let's support the new recursive structure primarily.
+            // If filters is array, we assume it's the legacy flat structure OR a list of root conditions (implicit AND)
+            // Let's reconstruct standard recursive builder if possible or stick to simple loop for flat.
+            
+            // Checking if it's the new structure passed as array of one root group?
+            // If the user sends { logic: 'AND', items: [...] }, it comes as object.
+            // If express parses JSON, it might be object.
+            // Let's handle both.
+        }
+    } else if (typeof filters === 'object' && filters !== null) {
+        // It's a root group
+        const sql = buildWhere(filters);
+        if (sql) whereClause = `WHERE ${sql}`;
+    }
+
+    if (!whereClause && Array.isArray(filters) && filters.length > 0) {
+         const conditions = filters.map((f, index) => {
+             const validOps = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'NOT LIKE', 'IS EMPTY', 'IS NOT EMPTY'];
+             const op = validOps.includes(f.operator) ? f.operator : '=';
+             
+             if (op === 'IS EMPTY') {
+                 const clause = `("${f.column}" IS NULL OR "${f.column}" = '')`;
+                 if (index > 0) {
+                     const logic = (f.logic === 'OR') ? 'OR' : 'AND';
+                     return ` ${logic} ${clause}`;
+                 }
+                 return clause;
+             }
+             if (op === 'IS NOT EMPTY') {
+                 const clause = `("${f.column}" IS NOT NULL AND "${f.column}" != '')`;
+                 if (index > 0) {
+                     const logic = (f.logic === 'OR') ? 'OR' : 'AND';
+                     return ` ${logic} ${clause}`;
+                 }
+                 return clause;
+             }
+
+             if (op === 'LIKE' || op === 'NOT LIKE') params.push(`%${f.value}%`);
+             else params.push(f.value);
+             const clause = `"${f.column}" ${op} ?`;
+             if (index > 0) {
+                 const logic = (f.logic === 'OR') ? 'OR' : 'AND';
+                 return ` ${logic} ${clause}`;
+             }
+             return clause;
         });
         whereClause = `WHERE ${conditions.join('')}`;
     }
 
-    const count = db.prepare(`SELECT COUNT(*) as count FROM "${tableName}" ${whereClause}`).get(...params).count;
-    const rows = db.prepare(`SELECT * FROM "${tableName}" ${whereClause} LIMIT ? OFFSET ?`).all(...params, pageSize, offset);
+    // --- 2. Build ORDER BY (Handling Groups as Primary Sort) ---
+    // We do NOT use SQL GROUP BY because we want to display all rows grouped visually.
+    // So we treat 'groups' as the primary sort keys.
+    const selectClause = 'SELECT *';
+    
+    let orderByParts = [];
+    
+    // 1. Add Groups to Sort Order
+    if (groups && groups.length > 0) {
+        const validGroups = groups.filter(g => typeof g === 'string' && !g.includes('"'));
+        validGroups.forEach(g => {
+             // Use existing sort direction if specified, otherwise ASC
+             const existingSort = sorts.find(s => s.column === g);
+             const dir = existingSort ? (existingSort.direction?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC') : 'ASC';
+             orderByParts.push(`"${g}" ${dir}`);
+        });
+    }
+    
+    // 2. Add remaining Sorts
+    if (sorts && sorts.length > 0) {
+        sorts.forEach(s => {
+            // Skip if already added via groups
+            if (groups && groups.includes(s.column)) return;
+            
+            const dir = s.direction?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+            if (typeof s.column === 'string' && !s.column.includes('"')) {
+                orderByParts.push(`"${s.column}" ${dir}`);
+            }
+        });
+    }
+
+    let orderByClause = '';
+    if (orderByParts.length > 0) {
+        orderByClause = `ORDER BY ${orderByParts.join(', ')}`;
+    }
+
+    // --- 3. Execute ---
+    // Count total matches
+    const countSql = `SELECT COUNT(*) as count FROM "${tableName}" ${whereClause}`;
+    
+    const count = db.prepare(countSql).get(...params).count;
+    
+    // No GROUP BY clause in SQL
+    const sql = `${selectClause} FROM "${tableName}" ${whereClause} ${orderByClause} LIMIT ? OFFSET ?`;
+    const rows = db.prepare(sql).all(...params, pageSize, offset);
 
     return {
         data: rows,

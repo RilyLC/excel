@@ -100,17 +100,22 @@ app.get('/api/tables/:tableName/data', (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 50;
     
-    // Parse filters from query string (expecting JSON string in 'filters')
+    // Parse complex params
     let filters = [];
+    let sorts = [];
+    let groups = [];
+
     if (req.query.filters) {
-        try {
-            filters = JSON.parse(req.query.filters);
-        } catch (e) {
-            console.error('Filter parse error', e);
-        }
+        try { filters = JSON.parse(req.query.filters); } catch (e) { console.error('Filter parse error', e); }
+    }
+    if (req.query.sorts) {
+        try { sorts = JSON.parse(req.query.sorts); } catch (e) { console.error('Sort parse error', e); }
+    }
+    if (req.query.groups) {
+        try { groups = JSON.parse(req.query.groups); } catch (e) { console.error('Group parse error', e); }
     }
 
-    const result = tableService.getTableData(tableName, page, pageSize, filters);
+    const result = tableService.getTableData(tableName, page, pageSize, filters, sorts, groups);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

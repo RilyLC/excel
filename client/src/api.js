@@ -9,12 +9,14 @@ export const api = {
 
   getTables: (projectId) => axios.get(`${API_URL}/tables`, { params: { projectId } }),
   uploadFile: (formData) => axios.post(`${API_URL}/upload`, formData),
-  getTableData: (tableName, page, pageSize, filters) => 
+  getTableData: (tableName, page, pageSize, filters, sorts = [], groups = []) => 
     axios.get(`${API_URL}/tables/${tableName}/data`, { 
       params: { 
         page, 
         pageSize,
-        filters: JSON.stringify(filters || [])
+        filters: JSON.stringify(filters || []),
+        sorts: JSON.stringify(sorts),
+        groups: JSON.stringify(groups)
       } 
     }),
   deleteTable: (id) => axios.delete(`${API_URL}/tables/${id}`),

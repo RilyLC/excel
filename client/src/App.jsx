@@ -15,8 +15,10 @@ function App() {
   const [activeProject, setActiveProject] = useState(null); // null means "All" or "Uncategorized"
 
   const [tableData, setTableData] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 50, totalPages: 1, total: 0 });
   const [filters, setFilters] = useState([]);
+  const [sorts, setSorts] = useState([]); // [{ column, direction }]
+  const [groups, setGroups] = useState([]); // [column]
   
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -70,15 +72,25 @@ function App() {
     loadData();
   }, [loadData]);
 
+  // Update document title based on active table
+  useEffect(() => {
+    if (activeTable) {
+      document.title = activeTable.name;
+    } else {
+      document.title = '表格管理系统';
+    }
+  }, [activeTable]);
+
   // Load Table Data
-  const loadTableData = useCallback(async (table, page = 1, currentFilters = []) => {
+  const loadTableData = useCallback(async (table, page = 1, currentFilters = [], currentSorts = [], currentGroups = [], pageSize = 50) => {
     if (!table) return;
     setIsLoading(true);
     try {
-      const res = await api.getTableData(table.table_name, page, 50, currentFilters);
+      const res = await api.getTableData(table.table_name, page, pageSize, currentFilters, currentSorts, currentGroups);
       setTableData(res.data.data);
       setPagination({
         page: res.data.page,
+        pageSize: pageSize,
         totalPages: res.data.totalPages,
         total: res.data.total
       });
@@ -149,8 +161,10 @@ function App() {
     setSearchResults(null); // Clear search mode
     setSearchQuery('');
     setFilters(initialFilters);
+    setSorts([]);
+    setGroups([]);
     setPagination({ page: 1, totalPages: 1, total: 0 });
-    loadTableData(table, 1, initialFilters);
+    loadTableData(table, 1, initialFilters, [], []);
   };
 
   // Handle Search
@@ -273,6 +287,23 @@ function App() {
         alert("更新失败");
         // Revert or reload
         loadTableData(activeTable, pagination.page, filters);
+    }
+  };
+
+  const handleTableUpdate = async (updatedTableMeta) => {
+    try {
+        await api.updateTable(updatedTableMeta.id, updatedTableMeta);
+        // Refresh local state without full reload if possible, but loadData is safest
+        
+        // Update local activeTable reference immediately for UI responsiveness
+        setActiveTable(updatedTableMeta);
+        
+        // Also update the table in the list 'tables'
+        setTables(prev => prev.map(t => t.id === updatedTableMeta.id ? updatedTableMeta : t));
+        
+    } catch (err) {
+        console.error("Update table failed", err);
+        alert("更新表格信息失败");
     }
   };
 
@@ -563,16 +594,29 @@ function App() {
                 <DataGrid 
                     tableMeta={activeTable}
                     data={tableData}
+                    
+                    // Pagination Props
                     totalPages={pagination.totalPages}
                     currentPage={pagination.page}
+                    pageSize={pagination.pageSize}
+                    totalCount={pagination.total}
+                    
                     initialFilters={filters}
-                    onPageChange={(p) => loadTableData(activeTable, p, filters)}
-                    onFilterChange={(newFilters) => {
+                    initialSorts={sorts}
+                    initialGroups={groups}
+                    
+                    onViewChange={(newFilters, newSorts, newGroups) => {
                         setFilters(newFilters);
-                        loadTableData(activeTable, 1, newFilters);
+                        setSorts(newSorts);
+                        setGroups(newGroups);
+                        loadTableData(activeTable, 1, newFilters, newSorts, newGroups, pagination.pageSize);
                     }}
+                    onPageChange={(p) => loadTableData(activeTable, p, filters, sorts, groups, pagination.pageSize)}
+                    onPageSizeChange={(ps) => loadTableData(activeTable, 1, filters, sorts, groups, ps)}
+
                     onExport={handleExportTable}
                     onCellUpdate={handleCellUpdate}
+                    onTableUpdate={handleTableUpdate}
                     onManage={() => {
                         setManageTable(activeTable);
                         setNewProjectForTable(activeTable.project_id || 'null');
