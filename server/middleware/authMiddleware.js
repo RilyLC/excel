@@ -5,7 +5,7 @@ const authenticateToken = (req, res, next) => {
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
     if (!token) {
-        return res.status(401).json({ error: 'Access denied' });
+        return res.status(401).json({ error: '未授权访问' });
     }
 
     try {
@@ -13,7 +13,7 @@ const authenticateToken = (req, res, next) => {
         req.user = user;
         next();
     } catch (err) {
-        return res.status(403).json({ error: 'Invalid token' });
+        return res.status(403).json({ error: '无效的 token' });
     }
 };
 

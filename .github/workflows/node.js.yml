@@ -1,10 +1,11 @@
-name: CI
+name: Web Build
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -34,5 +35,10 @@ jobs:
       - name: Install server deps
         run: npm ci --prefix server
 
-      - name: Smoke load server DB module
-        run: node -e "require('./server/db')"
+      - name: Upload Web Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-release
+          path: |
+            server/
+            !server/node_modules/

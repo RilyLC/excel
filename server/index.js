@@ -23,7 +23,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.post('/api/auth/register', (req, res) => {
     try {
         const { username, password } = req.body;
-        if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+        if (!username || !password) return res.status(400).json({ error: '用户名和密码是必填项' });
         const user = authService.register(username, password);
         res.json(user);
     } catch (err) {
@@ -34,7 +34,7 @@ app.post('/api/auth/register', (req, res) => {
 app.post('/api/auth/login', (req, res) => {
     try {
         const { username, password } = req.body;
-        if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+        if (!username || !password) return res.status(400).json({ error: '用户名和密码是必填项' });
         const result = authService.login(username, password);
         res.json(result);
     } catch (err) {
@@ -45,6 +45,20 @@ app.post('/api/auth/login', (req, res) => {
 // --- Middleware for Protected Routes ---
 // Apply to all /api routes defined BELOW this point
 app.use('/api', authenticateToken);
+
+// --- Auth Routes (Protected) ---
+app.post('/api/auth/change-password', (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body || {};
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ error: '原密码和新密码是必填项' });
+        }
+        const result = authService.changePassword(req.user.id, oldPassword, newPassword);
+        res.json(result);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
 
 // Projects API
 app.get('/api/projects', (req, res) => {
@@ -59,7 +73,7 @@ app.get('/api/projects', (req, res) => {
 app.post('/api/projects', (req, res) => {
     try {
         const { name, description } = req.body;
-        if (!name) return res.status(400).json({ error: 'Project name is required' });
+        if (!name) return res.status(400).json({ error: '项目名称是必填项' });
         const project = tableService.createProject(name, description, req.user.id);
         res.json(project);
     } catch (err) {
@@ -113,7 +127,7 @@ app.put('/api/tables/:id', (req, res) => {
 // 2. Upload Excel
 app.post('/api/upload', upload.single('file'), (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!req.file) return res.status(400).json({ error: '请上传文件' });
     
     // Fix filename encoding (latin1 -> utf8)
     const originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
@@ -140,13 +154,13 @@ app.get('/api/tables/:tableName/data', (req, res) => {
     let groups = [];
 
     if (req.query.filters) {
-        try { filters = JSON.parse(req.query.filters); } catch (e) { console.error('Filter parse error', e); }
+        try { filters = JSON.parse(req.query.filters); } catch (e) { console.error('筛选异常', e); }
     }
     if (req.query.sorts) {
-        try { sorts = JSON.parse(req.query.sorts); } catch (e) { console.error('Sort parse error', e); }
+        try { sorts = JSON.parse(req.query.sorts); } catch (e) { console.error('排序异常', e); }
     }
     if (req.query.groups) {
-        try { groups = JSON.parse(req.query.groups); } catch (e) { console.error('Group parse error', e); }
+        try { groups = JSON.parse(req.query.groups); } catch (e) { console.error('分组异常', e); }
     }
 
     const result = tableService.getTableData(tableName, page, pageSize, filters, sorts, groups, req.user.id);
@@ -164,10 +178,10 @@ app.get('/api/tables/:tableName/aggregates', (req, res) => {
         let aggregates = {};
 
         if (req.query.filters) {
-            try { filters = JSON.parse(req.query.filters); } catch (e) { console.error('Filter parse error', e); }
+            try { filters = JSON.parse(req.query.filters); } catch (e) { console.error('筛选异常', e); }
         }
         if (req.query.aggregates) {
-            try { aggregates = JSON.parse(req.query.aggregates); } catch (e) { console.error('Aggregates parse error', e); }
+            try { aggregates = JSON.parse(req.query.aggregates); } catch (e) { console.error('聚合异常', e); }
         }
 
         const result = tableService.getTableAggregates(tableName, filters, aggregates, req.user.id);
@@ -184,17 +198,17 @@ app.get('/api/tables/:tableName/rows/:id/locate', (req, res) => {
         const { tableName, id } = req.params;
         const pageSize = Math.max(1, parseInt(req.query.pageSize, 10) || 50);
         const rowId = Number(id);
-        if (!Number.isFinite(rowId)) return res.status(400).json({ error: 'Invalid row id' });
+        if (!Number.isFinite(rowId)) return res.status(400).json({ error: '无效行ID' });
         if (typeof tableName !== 'string' || tableName.includes('"')) {
-            return res.status(400).json({ error: 'Invalid table name' });
+            return res.status(400).json({ error: '无效表名' });
         }
         
         // Verify ownership manually since this logic is inline
         const isOwned = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, req.user.id);
-        if (!isOwned) return res.status(404).json({ error: 'Table not found or permission denied' });
+        if (!isOwned) return res.status(404).json({ error: '表不存在或权限不足' });
 
         const exists = db.prepare(`SELECT 1 as ok FROM "${tableName}" WHERE id = ? LIMIT 1`).get(rowId);
-        if (!exists) return res.status(404).json({ error: 'Row not found' });
+        if (!exists) return res.status(404).json({ error: '行不存在' });
 
         // rank in id ASC order: count rows with id < rowId
         const rankRes = db.prepare(`SELECT COUNT(*) as cnt FROM "${tableName}" WHERE id < ?`).get(rowId);
@@ -401,7 +415,7 @@ app.get('/api/search', (req, res) => {
                     const countRes = db.prepare(countSql).get(...params);
                     totalMatches = countRes ? countRes.count : 0;
                 } catch (e) {
-                    console.error(`Error counting matches for ${table.name}`, e);
+                    console.error(`查询表${table.name}匹配行数时出错`, e);
                 }
 
                 // Get Preview Rows
@@ -416,7 +430,7 @@ app.get('/api/search', (req, res) => {
                     matches = db.prepare(sql).all(...params);
                 } catch (e) {
                     // Ignore errors (e.g. type mismatch in comparison)
-                    console.error(`Error searching table ${table.name}`, e);
+                    console.error(`查询表${table.name}预览行时出错`, e);
                 }
             }
 
@@ -440,7 +454,7 @@ app.get('/api/search', (req, res) => {
 app.post('/api/query/save', (req, res) => {
     try {
         const { sql, tableName, projectId } = req.body;
-        if (!sql || !tableName) return res.status(400).json({ error: 'SQL and tableName are required' });
+        if (!sql || !tableName) return res.status(400).json({ error: 'SQL和表名是必填项' });
         
         const result = tableService.executeQueryAndSave(sql, tableName, projectId, req.user.id);
         res.json(result);
@@ -453,7 +467,7 @@ app.post('/api/query/save', (req, res) => {
 app.post('/api/query/preview', (req, res) => {
     try {
         const { sql } = req.body;
-        if (!sql) return res.status(400).json({ error: 'SQL is required' });
+        if (!sql) return res.status(400).json({ error: 'SQL是必填项' });
         
         const result = tableService.previewQuery(sql, req.user.id);
         res.json(result);
@@ -498,7 +512,7 @@ app.post('/api/tables/:tableName/columns', (req, res) => {
     try {
         const { tableName } = req.params;
         const { name, type } = req.body;
-        if (!name) return res.status(400).json({ error: 'Column name is required' });
+        if (!name) return res.status(400).json({ error: '列名是必填项' });
         
         const result = tableService.addColumn(tableName, name, type, req.user.id);
         res.json(result);
@@ -523,7 +537,7 @@ app.use(express.static(publicDir));
 
 app.get('*', (req, res) => {
     if (req.path.startsWith('/api')) {
-        return res.status(404).json({ error: 'Not found' });
+        return res.status(404).json({ error: '未找到' });
     }
     res.sendFile(path.join(publicDir, 'index.html'));
 });

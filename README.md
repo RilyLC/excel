@@ -98,11 +98,5 @@ npm run dist
 
 产物在 release/ 目录。首次启动会在可执行文件同级生成 data/app.db。
 
-## GitHub Actions
 
-仓库自带 CI（.github/workflows/node.js.yml）：
-
-- 安装 root 与 client 依赖
-- 对 client 执行 lint + build
-- 对 server 做最小化 smoke 检查（加载 db 模块）
 

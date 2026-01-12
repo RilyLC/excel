@@ -25,7 +25,7 @@ export default function Sidebar({
       <div className="p-4 border-b border-slate-800">
         <h1 className="font-bold text-white flex items-center gap-2 mb-4">
           <Database size={20} className="text-blue-400" />
-          表格管理系统
+          数据管理平台
         </h1>
         
         {/* Project Selector */}
@@ -171,7 +171,7 @@ export default function Sidebar({
       </div>
       
       <div className="p-4 border-t border-slate-800 text-xs text-slate-500 text-center shrink-0">
-        v1.0.0 本地版
+        v1.0.0 
       </div>
     </div>
   );

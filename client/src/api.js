@@ -21,6 +21,7 @@ client.interceptors.response.use(res => res, err => {
 export const api = {
   login: (username, password) => axios.post(`${API_URL}/auth/login`, { username, password }),
   register: (username, password) => axios.post(`${API_URL}/auth/register`, { username, password }),
+  changePassword: (oldPassword, newPassword) => client.post('/auth/change-password', { oldPassword, newPassword }),
 
   getProjects: () => client.get('/projects'),
   createProject: (data) => client.post('/projects', data),

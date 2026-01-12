@@ -7,8 +7,10 @@ import ConfirmModal from './components/ConfirmModal';
 import PromptModal from './components/PromptModal';
 import AlertModal from './components/AlertModal';
 import { api } from './api';
-import { Search, Loader2, Filter, Plus, Trash2, Download, Database as DatabaseIcon, LogOut } from 'lucide-react';
+import { Search, Loader2, Filter, Plus, Trash2, Download, Database as DatabaseIcon, LogOut, KeyRound } from 'lucide-react';
 import QueryBuilder from './components/QueryBuilder';
+
+const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d)[\S]{8,64}$/;
 
 /* --- Global Search Filter Components (supports parentheses via groups) --- */
 
@@ -191,6 +193,90 @@ function App({ onLogout }) {
       setPromptState({ isOpen: true, title, message, onConfirm, defaultValue });
   };
 
+  // Change Password Modal
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [changePasswordForm, setChangePasswordForm] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' });
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [changePasswordTouched, setChangePasswordTouched] = useState({ oldPassword: false, newPassword: false, confirmPassword: false });
+  const [changePasswordErrors, setChangePasswordErrors] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' });
+
+  const validateChangePasswordField = (field, value, allValues) => {
+      const v = value || '';
+      if (field === 'oldPassword') {
+          if (!v) return '原密码是必填项';
+          return '';
+      }
+      if (field === 'newPassword') {
+          if (!v) return '新密码是必填项';
+          if (!PASSWORD_REGEX.test(v)) return '新密码格式不正确（8-64位，至少包含字母和数字，且不能包含空格）';
+          return '';
+      }
+      if (field === 'confirmPassword') {
+          if (!v) return '确认新密码是必填项';
+          if (v !== (allValues?.newPassword || '')) return '两次输入的新密码不一致';
+          return '';
+      }
+      return '';
+  };
+
+  const setChangePasswordField = (field, value) => {
+      setChangePasswordForm(prev => {
+          const next = { ...prev, [field]: value };
+          // 如果相关字段已被触发过失焦，则同步刷新错误信息
+          setChangePasswordErrors(errPrev => {
+              const errNext = { ...errPrev };
+              if (changePasswordTouched[field]) {
+                  errNext[field] = validateChangePasswordField(field, value, next);
+              }
+              // newPassword 变化会影响 confirmPassword
+              if (field === 'newPassword' && changePasswordTouched.confirmPassword) {
+                  errNext.confirmPassword = validateChangePasswordField('confirmPassword', next.confirmPassword, next);
+              }
+              return errNext;
+          });
+          return next;
+      });
+  };
+
+  const closeChangePassword = () => {
+      setIsChangePasswordOpen(false);
+      setChangePasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' });
+      setIsChangingPassword(false);
+      setChangePasswordTouched({ oldPassword: false, newPassword: false, confirmPassword: false });
+      setChangePasswordErrors({ oldPassword: '', newPassword: '', confirmPassword: '' });
+  };
+
+  const submitChangePassword = async () => {
+      const oldPassword = changePasswordForm.oldPassword;
+      const newPassword = changePasswordForm.newPassword;
+      const confirmPassword = changePasswordForm.confirmPassword;
+
+      const errs = {
+          oldPassword: validateChangePasswordField('oldPassword', oldPassword, changePasswordForm),
+          newPassword: validateChangePasswordField('newPassword', newPassword, changePasswordForm),
+          confirmPassword: validateChangePasswordField('confirmPassword', confirmPassword, changePasswordForm),
+      };
+      setChangePasswordTouched({ oldPassword: true, newPassword: true, confirmPassword: true });
+      setChangePasswordErrors(errs);
+      if (errs.oldPassword || errs.newPassword || errs.confirmPassword) {
+          showAlert(errs.oldPassword || errs.newPassword || errs.confirmPassword, 'warning');
+          return;
+      }
+
+      setIsChangingPassword(true);
+      try {
+          await api.changePassword(oldPassword, newPassword);
+          showAlert('密码修改成功，请使用新密码重新登录', 'success');
+          closeChangePassword();
+          onLogout();
+      } catch (err) {
+          const msg = err.response?.data?.error;
+          showAlert(msg || '修改密码失败', 'error');
+      } finally {
+          setIsChangingPassword(false);
+      }
+  };
+
 
   const [tableData, setTableData] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, pageSize: 50, totalPages: 1, total: 0 });
@@ -301,7 +387,7 @@ function App({ onLogout }) {
     if (activeTable) {
       document.title = activeTable.name;
     } else {
-      document.title = '表格管理系统';
+      document.title = '数据管理平台';
     }
   }, [activeTable]);
 
@@ -712,8 +798,15 @@ function App({ onLogout }) {
                     <span className="text-sm font-semibold text-gray-700">
                         {JSON.parse(localStorage.getItem('user') || '{}').username || 'User'}
                     </span>
-                    <span className="text-xs text-gray-500">管理员</span>
+                    <span className="text-xs text-gray-500">用户</span>
                 </div>
+                <button
+                    onClick={() => setIsChangePasswordOpen(true)}
+                    className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                    title="修改密码"
+                >
+                    <KeyRound size={18} />
+                </button>
                 <button 
                     onClick={onLogout}
                     className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
@@ -723,6 +816,102 @@ function App({ onLogout }) {
                 </button>
             </div>
           </div>
+
+          <Modal
+              isOpen={isChangePasswordOpen}
+              onClose={closeChangePassword}
+              title="修改密码"
+              size="sm"
+              footer={
+                  <>
+                      <button
+                          onClick={closeChangePassword}
+                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                          disabled={isChangingPassword}
+                      >
+                          取消
+                      </button>
+                      <button
+                          onClick={submitChangePassword}
+                          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                          disabled={isChangingPassword}
+                      >
+                          {isChangingPassword ? '提交中...' : '确认修改'}
+                      </button>
+                  </>
+              }
+          >
+              <div className="space-y-4">
+                  <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">原密码</label>
+                      <input
+                          type="password"
+                          value={changePasswordForm.oldPassword}
+                          onChange={(e) => setChangePasswordField('oldPassword', e.target.value)}
+                          onBlur={() => {
+                              setChangePasswordTouched(prev => ({ ...prev, oldPassword: true }));
+                              setChangePasswordErrors(prev => ({
+                                  ...prev,
+                                  oldPassword: validateChangePasswordField('oldPassword', changePasswordForm.oldPassword, changePasswordForm)
+                              }));
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          autoComplete="current-password"
+                      />
+                      {changePasswordTouched.oldPassword && changePasswordErrors.oldPassword && (
+                          <div className="mt-1 text-xs text-red-600">{changePasswordErrors.oldPassword}</div>
+                      )}
+                  </div>
+                  <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">新密码</label>
+                      <input
+                          type="password"
+                          value={changePasswordForm.newPassword}
+                          onChange={(e) => setChangePasswordField('newPassword', e.target.value)}
+                          onBlur={() => {
+                              setChangePasswordTouched(prev => ({ ...prev, newPassword: true }));
+                              setChangePasswordErrors(prev => {
+                                  const next = { ...prev };
+                                  next.newPassword = validateChangePasswordField('newPassword', changePasswordForm.newPassword, changePasswordForm);
+                                  if (changePasswordTouched.confirmPassword) {
+                                      next.confirmPassword = validateChangePasswordField('confirmPassword', changePasswordForm.confirmPassword, changePasswordForm);
+                                  }
+                                  return next;
+                              });
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          autoComplete="new-password"
+                      />
+                      <div className="mt-1 text-xs text-gray-500">8-64位，至少包含字母和数字，且不能包含空格</div>
+                      {changePasswordTouched.newPassword && changePasswordErrors.newPassword && (
+                          <div className="mt-1 text-xs text-red-600">{changePasswordErrors.newPassword}</div>
+                      )}
+                  </div>
+                  <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">确认新密码</label>
+                      <input
+                          type="password"
+                          value={changePasswordForm.confirmPassword}
+                          onChange={(e) => setChangePasswordField('confirmPassword', e.target.value)}
+                          onBlur={() => {
+                              setChangePasswordTouched(prev => ({ ...prev, confirmPassword: true }));
+                              setChangePasswordErrors(prev => ({
+                                  ...prev,
+                                  confirmPassword: validateChangePasswordField('confirmPassword', changePasswordForm.confirmPassword, changePasswordForm)
+                              }));
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          autoComplete="new-password"
+                          onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !isChangingPassword) submitChangePassword();
+                          }}
+                      />
+                      {changePasswordTouched.confirmPassword && changePasswordErrors.confirmPassword && (
+                          <div className="mt-1 text-xs text-red-600">{changePasswordErrors.confirmPassword}</div>
+                      )}
+                  </div>
+              </div>
+          </Modal>
 
           {/* Advanced Search Panel */}
           {showAdvancedSearch && (

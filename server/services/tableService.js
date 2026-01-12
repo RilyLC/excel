@@ -7,7 +7,7 @@ function sanitizeColumnName(name) {
   
   // Allow Chinese characters, alphanumeric, and underscores
   // Replace anything that is NOT (Chinese, Letter, Number, Underscore)
-  let sanitized = name.trim().replace(/[^\u4e00-\u9fa5a-zA-Z0-9_]/g, '_');
+  let sanitized = name.trim().replace(/[^\u4e00-\u9fffa-zA-Z0-9_]/g, '_');
   
   // Ensure it doesn't start with a number (if it does, prefix with _)
   if (/^[0-9]/.test(sanitized)) {
@@ -23,6 +23,25 @@ function inferType(value) {
   if (typeof value === 'number') return Number.isInteger(value) ? 'INTEGER' : 'REAL';
   if (typeof value === 'boolean') return 'INTEGER'; // 0 or 1
   return 'TEXT';
+}
+
+// Generate unique internal table name to avoid collisions (use UUIDs)
+function generateUniqueTableName(prefix = 't') {
+  const crypto = require('crypto');
+
+  // Prefer crypto.randomUUID() when available (Node 14.17+); fallback to randomBytes
+  for (let i = 0; i < 10; i++) {
+    const id = (typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
+    const candidate = `${prefix}_${id}`;
+    const existsMeta = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(candidate);
+    const existsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(candidate);
+    if (!existsMeta && !existsTable) return candidate;
+    // Extremely small chance of collision, retry
+  }
+
+  // Fallback to a longer random value if all retries fail
+  const fallbackId = (typeof require('crypto').randomUUID === 'function') ? require('crypto').randomUUID() : require('crypto').randomBytes(24).toString('hex');
+  return `${prefix}_${fallbackId}`;
 }
 
 // Projects
@@ -45,7 +64,7 @@ exports.deleteProject = (id, deleteTables = false, userId) => {
             // For security, just say not found or success (idempotent).
             // Let's assume strict check.
             const exists = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
-            if (exists) throw new Error('Permission denied');
+            if (exists) throw new Error('项目不存在或没有权限');
             return; // Not found, ignore
         }
 
@@ -87,7 +106,7 @@ exports.updateProject = (id, name, description, userId) => {
     // Check if updated anything
     if (info.changes === 0) {
          const exists = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
-         if (exists) throw new Error('Permission denied or no changes');
+         if (exists) throw new Error('项目不存在或没有权限');
          // else not found
     }
     
@@ -100,7 +119,7 @@ exports.updateTableMeta = (id, { name, projectId, columns }, userId) => {
 
     // Verify ownership
     const table = db.prepare('SELECT id FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
-    if (!table) throw new Error('Table not found or permission denied');
+    if (!table) throw new Error('表不存在或没有权限');
     
     if (name) {
         updates.push('name = ?');
@@ -139,12 +158,11 @@ exports.importExcel = (buffer, originalFilename, projectId = null, userId) => {
   const data = xlsx.utils.sheet_to_json(sheet, { defval: null });
   
   if (data.length === 0) {
-    throw new Error('Sheet is empty');
+    throw new Error('表格为空');
   }
 
-  // Generate Table Name
-  const timestamp = Date.now();
-  const tableName = `t_${timestamp}`;
+  // Generate Table Name (ensure uniqueness)
+  const tableName = generateUniqueTableName('t');
   
   // Analyze Columns
   const headers = Object.keys(data[0]);
@@ -349,7 +367,7 @@ exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts 
     // Verify tableName exists in _app_tables AND belongs to user
     const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
     if (!tableExists) {
-        throw new Error(`Table ${tableName} not found or permission denied`);
+        throw new Error(`表 ${tableName} 未找到或没有权限`);
     }
 
     // Check if _sort_order exists
@@ -427,7 +445,7 @@ exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId) 
     // Verify tableName exists
     const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
     if (!tableExists) {
-        throw new Error(`Table ${tableName} not found or permission denied`);
+        throw new Error(`表 ${tableName} 未找到或没有权限`);
     }
 
     const params = [];
@@ -468,7 +486,7 @@ exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId) 
 exports.deleteTable = (id, userId) => {
     // Verify ownership
     const table = db.prepare('SELECT table_name FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
-    if (!table) throw new Error('Table not found or permission denied');
+    if (!table) throw new Error('表未找到或没有权限');
 
     const dropTransaction = db.transaction(() => {
         db.exec(`DROP TABLE IF EXISTS "${table.table_name}"`);
@@ -481,7 +499,7 @@ exports.deleteTable = (id, userId) => {
 exports.updateCellValue = (tableName, rowId, column, value, userId) => {
     // Verify table exists AND belongs to user
     const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-    if (!tableExists) throw new Error(`Table ${tableName} not found or permission denied`);
+    if (!tableExists) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     // Update
     const stmt = db.prepare(`UPDATE "${tableName}" SET "${column}" = ? WHERE id = ?`);
@@ -493,7 +511,7 @@ exports.updateCellValue = (tableName, rowId, column, value, userId) => {
 exports.exportTable = (tableName, userId) => {
     // Verify table exists and get display name
     const tableMeta = db.prepare('SELECT name, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-    if (!tableMeta) throw new Error(`Table ${tableName} not found or permission denied`);
+    if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     // Get Data
     const rows = db.prepare(`SELECT * FROM "${tableName}"`).all();
@@ -537,7 +555,7 @@ const validateReadOnlySelect = (sql, userId) => {
     });
 
     if (hasForbidden) {
-        throw new Error('Only SELECT queries are allowed.');
+        throw new Error('只允许执行 SELECT 查询。');
     }
 
     // 2. System Tables Check
@@ -546,13 +564,18 @@ const validateReadOnlySelect = (sql, userId) => {
         const pattern = new RegExp(`\\b${tbl}\\b|"${tbl}"`, 'i');
         return pattern.test(sql);
     });
-    if (hasSystemTable) throw new Error('Access to system tables is restricted.');
+    if (hasSystemTable) throw new Error('禁止访问系统表。');
 
     // 4. User Isolation Check (Optimized: Allowlist approach)
-    // Extract potential table names (pattern t_TIMESTAMP) from SQL
+    // Extract potential table names (pattern t_<uuid> or hex) from SQL, supporting quoted identifiers
     // This avoids checking every single other user's table (O(N_total) -> O(N_my_tables))
-    const tableNamePattern = /\b(t_\d+)\b/g;
-    const matches = sql.match(tableNamePattern) || [];
+    // UUIDs contain hex and hyphens; randomBytes fallback produces hex only, so allow both.
+    const tableNamePattern = /(?:"(t_[0-9a-fA-F-]{6,})"|\b(t_[0-9a-fA-F-]{6,})\b)/g;
+    const matches = [];
+    let m;
+    while ((m = tableNamePattern.exec(sql)) !== null) {
+        matches.push(m[1] || m[2]);
+    }
     
     if (matches.length > 0) {
         // Get all tables owned by current user
@@ -566,7 +589,7 @@ const validateReadOnlySelect = (sql, userId) => {
             if (!myTableSet.has(tbl)) {
                  // It's either someone else's table OR a non-existent table OR an unlucky alias collision
                  // In all cases, we block it for security.
-                throw new Error(`Access to table '${tbl}' is denied or table does not exist.`);
+                throw new Error(`没有权限访问 '${tbl}' 或表不存在。`);
             }
         }
     }
@@ -575,6 +598,8 @@ const validateReadOnlySelect = (sql, userId) => {
     // (Already covered by systemTables regex with 'i' flag)
 };
 
+exports._validateReadOnlySelect = validateReadOnlySelect;
+
 exports.executeQueryAndSave = (sql, newTableName, projectId = null, userId) => {
     try {
         validateReadOnlySelect(sql, userId);
@@ -582,16 +607,15 @@ exports.executeQueryAndSave = (sql, newTableName, projectId = null, userId) => {
         throw new Error(e.message);
     }
 
-    // Generate internal table name
-    const timestamp = Date.now();
-    const targetTableName = `t_${timestamp}`;
+    // Generate internal table name (ensure uniqueness)
+    const targetTableName = generateUniqueTableName('t');
     
     return db.transaction(() => {
         // 1. Create the table using the query
         try {
             db.exec(`CREATE TABLE "${targetTableName}" AS ${sql}`);
         } catch (e) {
-            throw new Error(`Query execution failed: ${e.message}`);
+            throw new Error(`查询执行失败: ${e.message}`);
         }
         
         // 2. Inspect the new table to get columns
@@ -635,14 +659,14 @@ exports.previewQuery = (sql, userId) => {
         
         return { columns, data: rows };
     } catch (e) {
-        throw new Error(`Query execution failed: ${e.message}`);
+        throw new Error(`查询执行失败: ${e.message}`);
     }
 };
 
 exports.addRow = (tableName, rowData = {}, position = null, userId) => {
     // Verify table exists AND belongs to user
     const tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-    if (!tableMeta) throw new Error(`Table ${tableName} not found or permission denied`);
+    if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const columns = JSON.parse(tableMeta.columns);
     const validColumns = columns.map(c => c.name);
@@ -731,7 +755,7 @@ exports.addRow = (tableName, rowData = {}, position = null, userId) => {
 exports.deleteRow = (tableName, rowId, userId) => {
     // Verify table exists AND belongs to user
     const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-    if (!tableExists) throw new Error(`Table ${tableName} not found or permission denied`);
+    if (!tableExists) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const info = db.prepare(`DELETE FROM "${tableName}" WHERE id = ?`).run(rowId);
     return { success: info.changes > 0 };
@@ -740,14 +764,14 @@ exports.deleteRow = (tableName, rowId, userId) => {
 exports.addColumn = (tableName, columnName, columnType = 'TEXT', userId) => {
     // Verify table exists AND belongs to user
     const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-    if (!tableMeta) throw new Error(`Table ${tableName} not found or permission denied`);
+    if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const sanitizedName = sanitizeColumnName(columnName);
     
     // Check for duplicate
     const currentColumns = JSON.parse(tableMeta.columns);
     if (currentColumns.some(c => c.name.toLowerCase() === sanitizedName.toLowerCase())) {
-        throw new Error(`Column ${sanitizedName} already exists`);
+        throw new Error(`列 ${sanitizedName} 已存在`);
     }
 
     return db.transaction(() => {
@@ -765,12 +789,12 @@ exports.addColumn = (tableName, columnName, columnType = 'TEXT', userId) => {
 exports.deleteColumn = (tableName, columnName, userId) => {
     // Verify table exists AND belongs to user
     const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-    if (!tableMeta) throw new Error(`Table ${tableName} not found`);
+    if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const currentColumns = JSON.parse(tableMeta.columns);
     const colIndex = currentColumns.findIndex(c => c.name === columnName);
     
-    if (colIndex === -1) throw new Error(`Column ${columnName} not found`);
+    if (colIndex === -1) throw new Error(`列 ${columnName} 未找到`);
 
     return db.transaction(() => {
         // 1. Alter Table (Try DROP COLUMN)
@@ -779,7 +803,7 @@ exports.deleteColumn = (tableName, columnName, userId) => {
         } catch (e) {
             // Fallback for older SQLite if needed (Create new table, copy data, rename)
             // But we assume newer SQLite here.
-            throw new Error(`Failed to delete column: ${e.message}`);
+            throw new Error(`删除列失败: ${e.message}`);
         }
         
         // 2. Update Meta
