@@ -5,6 +5,7 @@ const API_URL = import.meta.env.VITE_API_URL || '/api';
 export const api = {
   getProjects: () => axios.get(`${API_URL}/projects`),
   createProject: (data) => axios.post(`${API_URL}/projects`, data),
+  updateProject: (id, data) => axios.put(`${API_URL}/projects/${id}`, data),
   deleteProject: (id, deleteTables = false) => axios.delete(`${API_URL}/projects/${id}`, { params: { deleteTables } }),
 
   getTables: (projectId) => axios.get(`${API_URL}/tables`, { params: { projectId } }),
@@ -18,6 +19,14 @@ export const api = {
         sorts: JSON.stringify(sorts),
         groups: JSON.stringify(groups)
       } 
+    }),
+
+  getTableAggregates: (tableName, filters, aggregates) =>
+    axios.get(`${API_URL}/tables/${tableName}/aggregates`, {
+        params: {
+            filters: JSON.stringify(filters || []),
+            aggregates: JSON.stringify(aggregates || {})
+        }
     }),
 
   locateRow: (tableName, rowId, pageSize = 50) =>
@@ -48,4 +57,14 @@ export const api = {
     axios.post(`${API_URL}/query/save`, { sql, tableName, projectId }),
 
   previewQuery: (sql) => axios.post(`${API_URL}/query/preview`, { sql }),
+
+  addRow: (tableName, rowData, position = null) => {
+      if (position) {
+          return axios.post(`${API_URL}/tables/${tableName}/rows`, { data: rowData, position });
+      }
+      return axios.post(`${API_URL}/tables/${tableName}/rows`, rowData);
+  },
+  deleteRow: (tableName, rowId) => axios.delete(`${API_URL}/tables/${tableName}/rows/${rowId}`),
+  addColumn: (tableName, name, type) => axios.post(`${API_URL}/tables/${tableName}/columns`, { name, type }),
+  deleteColumn: (tableName, columnName) => axios.delete(`${API_URL}/tables/${tableName}/columns/${columnName}`),
 };

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Database, Plus, Trash2, Folder, FolderPlus, ChevronRight, ChevronDown } from 'lucide-react';
+import { Database, Plus, Trash2, Folder, FolderPlus, ChevronRight, ChevronDown, Pencil, Search, Settings } from 'lucide-react';
 
 export default function Sidebar({ 
     projects, 
@@ -7,13 +7,18 @@ export default function Sidebar({
     onSelectProject, 
     onCreateProject, 
     onDeleteProject,
+    onEditProject,
     tables, 
     activeTable, 
     onSelectTable, 
     onUploadClick, 
-    onDeleteTable 
+    onDeleteTable,
+    onManageTable
 }) {
   const [isProjectsExpanded, setIsProjectsExpanded] = useState(true);
+  const [tableSearch, setTableSearch] = useState('');
+
+  const filteredTables = tables.filter(t => t.name.toLowerCase().includes(tableSearch.toLowerCase()));
 
   return (
     <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen border-r border-slate-800">
@@ -31,7 +36,7 @@ export default function Sidebar({
                     <FolderPlus size={14} />
                 </button>
             </div>
-            <div className="space-y-1 max-h-40 overflow-y-auto">
+            <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
                 <button
                     onClick={() => onSelectProject(null)}
                     className={`w-full text-left px-3 py-1.5 text-sm rounded flex items-center gap-2 transition-colors ${
@@ -54,31 +59,44 @@ export default function Sidebar({
                     <div key={p.id} className="group relative flex items-center">
                         <button
                             onClick={() => onSelectProject(p)}
-                            className={`flex-1 text-left px-3 py-1.5 text-sm rounded flex items-center gap-2 transition-colors ${
+                            className={`flex-1 text-left px-3 py-1.5 text-sm rounded flex items-center gap-2 transition-colors pr-12 ${
                                 activeProject?.id === p.id ? 'bg-slate-800 text-white' : 'hover:bg-slate-800/50'
                             }`}
                         >
                             <Folder size={14} className={activeProject?.id === p.id ? "text-blue-400" : "text-slate-400"} />
                             <span className="truncate">{p.name}</span>
                         </button>
-                         <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteProject(p.id);
-                            }}
-                            className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 hover:text-red-400"
-                        >
-                            <Trash2 size={12} />
-                        </button>
+                         <div className="absolute right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onEditProject && onEditProject(p);
+                                }}
+                                className="p-1 hover:text-blue-400 text-slate-500"
+                                title="编辑项目"
+                            >
+                                <Pencil size={12} />
+                            </button>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteProject(p.id);
+                                }}
+                                className="p-1 hover:text-red-400 text-slate-500"
+                                title="删除项目"
+                            >
+                                <Trash2 size={12} />
+                            </button>
+                        </div>
                     </div>
                 ))}
             </div>
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto py-2">
-        <div className="px-4 py-2 flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+      <div className="flex-1 flex flex-col min-h-0">
+        <div className="px-4 py-3 flex items-center justify-between shrink-0">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 truncate max-w-[120px]" title={activeProject ? activeProject.name : '所有'}>
                 {activeProject ? activeProject.name : '所有'} 数据表
             </span>
             <button 
@@ -89,40 +107,70 @@ export default function Sidebar({
                 <Plus size={16} />
             </button>
         </div>
+
+        {/* Table Search */}
+        <div className="px-4 pb-2 shrink-0">
+            <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" size={12} />
+                <input 
+                    type="text" 
+                    placeholder="搜索表格..." 
+                    className="w-full bg-slate-800 border-none rounded py-1 pl-7 pr-2 text-xs text-slate-300 focus:ring-1 focus:ring-blue-500 placeholder-slate-600"
+                    value={tableSearch}
+                    onChange={e => setTableSearch(e.target.value)}
+                />
+            </div>
+        </div>
         
-        <ul>
-          {tables.map(table => (
-            <li key={table.id} className="group relative">
-              <button
-                onClick={() => onSelectTable(table)}
-                className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors ${
-                  activeTable?.id === table.id 
-                    ? 'bg-blue-600 text-white' 
-                    : 'hover:bg-slate-800'
-                }`}
-              >
-                <span className="truncate">{table.name}</span>
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteTable(table.id);
-                }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 hover:text-red-400"
-              >
-                <Trash2 size={14} />
-              </button>
-            </li>
-          ))}
-          {tables.length === 0 && (
-            <li className="px-4 py-4 text-sm text-slate-500 text-center italic">
-              {activeProject ? '该项目下暂无表格' : '暂无表格'}
-            </li>
-          )}
-        </ul>
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+            <ul>
+            {filteredTables.map(table => (
+                <li key={table.id} className="group relative">
+                <button
+                    onClick={() => onSelectTable(table)}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors pr-14 ${
+                    activeTable?.id === table.id 
+                        ? 'bg-blue-600 text-white' 
+                        : 'hover:bg-slate-800 text-slate-300'
+                    }`}
+                    title={table.name}
+                >
+                    <span className="truncate">{table.name}</span>
+                </button>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                        onClick={(e) => {
+                        e.stopPropagation();
+                        onManageTable && onManageTable(table);
+                        }}
+                        className={`p-1 ${activeTable?.id === table.id ? 'text-blue-200 hover:text-white' : 'text-slate-500 hover:text-blue-400'}`}
+                        title="管理表格"
+                    >
+                        <Settings size={12} />
+                    </button>
+                    <button
+                        onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteTable(table.id);
+                        }}
+                        className={`p-1 ${activeTable?.id === table.id ? 'text-blue-200 hover:text-white' : 'text-slate-500 hover:text-red-400'}`}
+                        title="删除表格"
+                    >
+                        <Trash2 size={12} />
+                    </button>
+                </div>
+                </li>
+            ))}
+            {filteredTables.length === 0 && (
+                <li className="px-4 py-4 text-sm text-slate-500 text-center italic">
+                {tableSearch ? '无匹配表格' : (activeProject ? '该项目下暂无表格' : '暂无表格')}
+                </li>
+            )}
+            </ul>
+        </div>
       </div>
       
-      <div className="p-4 border-t border-slate-800 text-xs text-slate-500 text-center">
+      <div className="p-4 border-t border-slate-800 text-xs text-slate-500 text-center shrink-0">
         v1.0.0 本地版
       </div>
     </div>

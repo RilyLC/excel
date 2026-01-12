@@ -38,6 +38,16 @@ app.post('/api/projects', (req, res) => {
     }
 });
 
+app.put('/api/projects/:id', (req, res) => {
+    try {
+        const { name, description } = req.body;
+        const result = tableService.updateProject(req.params.id, name, description);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.delete('/api/projects/:id', (req, res) => {
     try {
         const deleteTables = req.query.deleteTables === 'true';
@@ -115,6 +125,27 @@ app.get('/api/tables/:tableName/data', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// 3.0.1 Get Table Aggregates
+app.get('/api/tables/:tableName/aggregates', (req, res) => {
+    try {
+        const { tableName } = req.params;
+        let filters = [];
+        let aggregates = {};
+
+        if (req.query.filters) {
+            try { filters = JSON.parse(req.query.filters); } catch (e) { console.error('Filter parse error', e); }
+        }
+        if (req.query.aggregates) {
+            try { aggregates = JSON.parse(req.query.aggregates); } catch (e) { console.error('Aggregates parse error', e); }
+        }
+
+        const result = tableService.getTableAggregates(tableName, filters, aggregates);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // 3.1 Locate Row (for jump without filtering)
@@ -392,6 +423,62 @@ app.post('/api/query/preview', (req, res) => {
         if (!sql) return res.status(400).json({ error: 'SQL is required' });
         
         const result = tableService.previewQuery(sql);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 11. Add Row
+app.post('/api/tables/:tableName/rows', (req, res) => {
+    try {
+        const { tableName } = req.params;
+        // Support both direct row object (legacy) and { data, position } wrapper
+        let rowData = req.body;
+        let position = null;
+
+        if (req.body && typeof req.body === 'object' && 'data' in req.body && 'position' in req.body) {
+            rowData = req.body.data;
+            position = req.body.position;
+        }
+
+        const result = tableService.addRow(tableName, rowData, position);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 12. Delete Row
+app.delete('/api/tables/:tableName/rows/:id', (req, res) => {
+    try {
+        const { tableName, id } = req.params;
+        const result = tableService.deleteRow(tableName, id);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 13. Add Column
+app.post('/api/tables/:tableName/columns', (req, res) => {
+    try {
+        const { tableName } = req.params;
+        const { name, type } = req.body;
+        if (!name) return res.status(400).json({ error: 'Column name is required' });
+        
+        const result = tableService.addColumn(tableName, name, type);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 14. Delete Column
+app.delete('/api/tables/:tableName/columns/:columnName', (req, res) => {
+    try {
+        const { tableName, columnName } = req.params;
+        const result = tableService.deleteColumn(tableName, columnName);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });

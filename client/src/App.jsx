@@ -218,6 +218,7 @@ function App() {
   
   // Table Management Modal
   const [manageTable, setManageTable] = useState(null); // Table object to manage
+  const [manageTableName, setManageTableName] = useState(''); // New Table Name
   const [newProjectForTable, setNewProjectForTable] = useState(''); // Project ID or 'null'
 
   // Query Builder State
@@ -250,6 +251,14 @@ function App() {
   const clearHistory = () => {
       setSearchHistory([]);
       localStorage.removeItem('searchHistory');
+  };
+
+  const removeHistoryItem = (term) => {
+      setSearchHistory(prev => {
+          const next = prev.filter(h => h !== term);
+          localStorage.setItem('searchHistory', JSON.stringify(next));
+          return next;
+      });
   };
 
   // Collect all unique columns across all tables for suggestion
@@ -330,6 +339,18 @@ function App() {
       }, '请输入新项目名称:');
   };
 
+  const handleEditProject = async (project) => {
+      showPrompt('重命名项目', async (newName) => {
+          if (newName === project.name) return;
+          try {
+              await api.updateProject(project.id, { name: newName });
+              loadData();
+          } catch (err) {
+              showAlert('更新项目失败');
+          }
+      }, '请输入新的项目名称:', project.name);
+  };
+
   const handleDeleteProject = async (id) => {
     const project = projects.find(p => p.id === id);
     if (!project) return;
@@ -352,14 +373,28 @@ function App() {
 
   const handleUpdateTableProject = async () => {
     if (!manageTable) return;
+    if (!manageTableName.trim()) {
+        showAlert('表名不能为空');
+        return;
+    }
     try {
-        await api.updateTable(manageTable.id, { 
-            projectId: newProjectForTable === 'null' ? null : newProjectForTable 
-        });
+        const updateData = {
+            name: manageTableName,
+            projectId: newProjectForTable === 'null' ? null : newProjectForTable
+        };
+        await api.updateTable(manageTable.id, updateData);
+        
+        // Update local state if successful
+        const updatedTable = { ...manageTable, ...updateData };
+        if (activeTable?.id === manageTable.id) {
+            setActiveTable(prev => ({ ...prev, ...updateData }));
+        }
+        setTables(prev => prev.map(t => t.id === manageTable.id ? { ...t, ...updateData } : t));
+
         setManageTable(null);
-        loadData();
+        // loadData(); // Optional, but local update is faster
     } catch (err) {
-        showAlert('更新表格所属项目失败');
+        showAlert('更新表格信息失败');
     }
   };
 
@@ -526,6 +561,16 @@ function App() {
 
   const handleTableUpdate = async (updatedTableMeta) => {
     try {
+        if (!updatedTableMeta || !updatedTableMeta.id) {
+            // It might be just a refresh request without meta update
+            // Or if id is missing, we can't update meta.
+            // If the intention was just to reload data:
+            if (activeTable) {
+                loadTableData(activeTable, pagination.page, filters, sorts, groups, pagination.pageSize);
+            }
+            return;
+        }
+
         await api.updateTable(updatedTableMeta.id, updatedTableMeta);
         // Refresh local state without full reload if possible, but loadData is safest
         
@@ -549,16 +594,22 @@ function App() {
         onSelectProject={handleSelectProject}
         onCreateProject={handleCreateProject}
         onDeleteProject={handleDeleteProject}
+        onEditProject={handleEditProject}
         tables={tables} 
         activeTable={activeTable} 
         onSelectTable={handleSelectTable}
         onUploadClick={() => setIsUploadOpen(true)}
         onDeleteTable={handleDeleteTable}
+        onManageTable={(table) => {
+            setManageTable(table);
+            setManageTableName(table.name);
+            setNewProjectForTable(table.project_id || 'null');
+        }}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="bg-white border-b border-gray-200 px-6 py-3 shadow-sm z-20 flex flex-col gap-3">
+        <header className="bg-white border-b border-gray-200 px-6 py-3 shadow-sm z-40 relative flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4 flex-1">
                 <form onSubmit={handleSearch} className="relative w-full max-w-md flex items-center gap-2">
@@ -576,7 +627,7 @@ function App() {
                             />
                             {/* Search History Dropdown */}
                             {showHistory && searchHistory.length > 0 && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-[999] overflow-hidden animate-in fade-in zoom-in-95 duration-100">
                                     <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
                                         <span className="text-xs font-semibold text-gray-500 uppercase">最近搜索</span>
                                         <button 
@@ -589,18 +640,33 @@ function App() {
                                     </div>
                                     <div className="max-h-60 overflow-y-auto">
                                         {searchHistory.map((term, idx) => (
-                                            <button
+                                            <div
                                                 key={idx}
-                                                type="button"
-                                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-2"
-                                                onMouseDown={() => {
-                                                    setSearchQuery(term);
-                                                    handleSearch({ preventDefault: () => {} }); // Trigger search immediately
-                                                }}
+                                                className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-blue-50"
                                             >
-                                                <Search size={14} className="text-gray-400" />
-                                                {term}
-                                            </button>
+                                                <button
+                                                    type="button"
+                                                    className="flex-1 text-left flex items-center gap-2"
+                                                    onMouseDown={() => {
+                                                        setSearchQuery(term);
+                                                        handleSearch({ preventDefault: () => {} }); // Trigger search immediately
+                                                    }}
+                                                >
+                                                    <Search size={14} className="text-gray-400" />
+                                                    <span className="truncate">{term}</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="text-gray-400 hover:text-red-500"
+                                                    title="删除这条记录"
+                                                    onMouseDown={(e) => {
+                                                        e.stopPropagation();
+                                                        removeHistoryItem(term);
+                                                    }}
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
                                         ))}
                                     </div>
                                 </div>
@@ -869,6 +935,7 @@ function App() {
                     focusRowId={focusRowId}
                     onManage={() => {
                         setManageTable(activeTable);
+                        setManageTableName(activeTable.name);
                         setNewProjectForTable(activeTable.project_id || 'null');
                     }}
                 />
@@ -914,36 +981,69 @@ function App() {
         <Modal
             isOpen={true}
             onClose={() => setManageTable(null)}
-            title={`管理表格: ${manageTable.name}`}
+            title="管理表格"
             footer={
-                <>
+                <div className="flex justify-between w-full">
                     <button 
-                        onClick={() => setManageTable(null)}
-                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        onClick={() => {
+                            if (window.confirm('确定要删除这张表吗？')) {
+                                api.deleteTable(manageTable.id).then(() => {
+                                    if (activeTable?.id === manageTable.id) setActiveTable(null);
+                                    setManageTable(null);
+                                    loadData();
+                                }).catch(() => showAlert('删除失败'));
+                            }
+                        }}
+                        className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
                     >
-                        取消
+                        删除表格
                     </button>
-                    <button 
-                        onClick={handleUpdateTableProject}
-                        className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm transition-colors"
-                    >
-                        保存
-                    </button>
-                </>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={() => setManageTable(null)}
+                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        >
+                            取消
+                        </button>
+                        <button 
+                            onClick={handleUpdateTableProject}
+                            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm transition-colors"
+                        >
+                            保存
+                        </button>
+                    </div>
+                </div>
             }
         >
-             <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">所属项目</label>
-                <select 
-                    className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    value={newProjectForTable}
-                    onChange={e => setNewProjectForTable(e.target.value)}
-                >
-                    <option value="null">未分类</option>
-                    {projects.map(p => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                </select>
+             <div className="space-y-4">
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">表格名称</label>
+                    <input 
+                        type="text"
+                        className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        value={manageTableName}
+                        onChange={e => setManageTableName(e.target.value)}
+                        placeholder="请输入表格名称"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">所属项目</label>
+                    <select 
+                        className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        value={newProjectForTable}
+                        onChange={e => setNewProjectForTable(e.target.value)}
+                    >
+                        <option value="null">未分类</option>
+                        {projects.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                    </select>
+                </div>
+                
+                <div className="bg-gray-50 p-3 rounded text-xs text-gray-500 border border-gray-200">
+                    <p className="mb-1"><span className="font-semibold">物理表名:</span> {manageTable.table_name}</p>
+                    <p><span className="font-semibold">创建时间:</span> {new Date(manageTable.created_at).toLocaleString()}</p>
+                </div>
             </div>
         </Modal>
       )}

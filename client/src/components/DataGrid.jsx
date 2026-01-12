@@ -4,7 +4,8 @@ import {
   getCoreRowModel,
   flexRender,
 } from '@tanstack/react-table';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, Plus, Trash2, Download, Settings, ArrowUp, ArrowDown, ArrowUpDown, GripVertical, Eye, EyeOff, Layers } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, Plus, Trash2, Download, Settings, ArrowUp, ArrowDown, ArrowUpDown, GripVertical, Eye, EyeOff, Layers, Calculator, Copy, Eraser, Columns, Rows } from 'lucide-react';
+import { api } from '../api';
 
 /* --- Helper Components --- */
 
@@ -99,7 +100,7 @@ const EditableCell = ({ value: initialValue, rowId, columnId, rowIndex, colIndex
             }}
             onMouseEnter={() => onSelectionMove(rowIndex, colIndex)}
             onMouseUp={onSelectionEnd}
-            onContextMenu={onContextMenu}
+            onContextMenu={(e) => onContextMenu(e, rowIndex, colIndex)}
         >
             <span className="truncate w-full block">{value}</span>
         </div>
@@ -298,6 +299,48 @@ const PageJumpInput = ({ currentPage, totalPages, onPageChange }) => {
     );
 };
 
+const AggregateCell = ({ value, func, onChange }) => {
+    const displayValue = useMemo(() => {
+        if (typeof value === 'number') {
+            return Number.isInteger(value) ? value : parseFloat(value.toFixed(2));
+        }
+        return value;
+    }, [value]);
+
+    return (
+        <div className="flex items-center justify-between px-2 py-1 h-full gap-1 group relative hover:bg-gray-100 transition-colors cursor-pointer">
+            <div className="flex flex-col min-w-0 flex-1">
+                {func ? (
+                    <>
+                        <span className="text-[10px] text-blue-500 font-bold uppercase leading-none mb-0.5 select-none">{func}</span>
+                        <span className="text-sm font-bold text-gray-800 truncate font-mono" title={value}>
+                            {displayValue}
+                        </span>
+                    </>
+                ) : (
+                    <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity select-none flex items-center gap-1">
+                        <Calculator size={12} /> 计算函数
+                    </span>
+                )}
+            </div>
+            
+            <select
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                value={func || ''}
+                onChange={e => onChange(e.target.value)}
+                title="选择聚合函数"
+            >
+                <option value="">无</option>
+                <option value="SUM">求和 (Sum)</option>
+                <option value="AVG">平均 (Avg)</option>
+                <option value="MIN">最小 (Min)</option>
+                <option value="MAX">最大 (Max)</option>
+                <option value="COUNT">计数 (Count)</option>
+            </select>
+        </div>
+    );
+};
+
 export default function DataGrid({ 
     tableMeta, 
     data, 
@@ -321,6 +364,39 @@ export default function DataGrid({
   // -- View State -- //
   const [showViewSettings, setShowViewSettings] = useState(false);
   const [activeTab, setActiveTab] = useState('filter'); // 'filter', 'sort', 'group'
+
+  // -- Aggregates State --
+  const [aggregates, setAggregates] = useState({});
+  const [aggregateResults, setAggregateResults] = useState({});
+
+  useEffect(() => {
+    // Reset aggregates when table changes
+    setAggregates({});
+    setAggregateResults({});
+  }, [tableMeta?.id]);
+
+  useEffect(() => {
+      const fetchAggregates = async () => {
+          // If no aggregates selected, clear results and return
+          if (Object.keys(aggregates).length === 0) {
+              setAggregateResults({});
+              return;
+          }
+
+          if (!tableMeta?.table_name) return;
+
+          try {
+              const res = await api.getTableAggregates(tableMeta.table_name, initialFilters, aggregates);
+              setAggregateResults(res.data || {});
+          } catch (e) {
+              console.error("Failed to fetch aggregates", e);
+          }
+      };
+
+      // Debounce slightly or just run
+      const timer = setTimeout(fetchAggregates, 200);
+      return () => clearTimeout(timer);
+  }, [aggregates, initialFilters, tableMeta?.table_name]);
 
   // Local State for View Configuration
   const [filters, setFilters] = useState(() => {
@@ -484,8 +560,117 @@ export default function DataGrid({
       return rowIndex >= minRow && rowIndex <= maxRow && colIndex >= minCol && colIndex <= maxCol;
   };
 
-  const handleContextMenu = (e) => {
-      e.preventDefault();
+  const [contextMenu, setContextMenu] = useState(null);
+
+  useEffect(() => {
+    const handleClick = () => setContextMenu(null);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, []);
+
+  const handleAddRow = async (positionDirection) => {
+      if (!tableMeta) return;
+      try {
+          const position = contextMenu?.rowId 
+            ? { rowId: contextMenu.rowId, direction: positionDirection } 
+            : null;
+            
+          await api.addRow(tableMeta.table_name, {}, position);
+          onTableUpdate && onTableUpdate();
+          setContextMenu(null);
+      } catch (e) {
+          alert('添加行失败');
+      }
+  };
+
+  const handleDeleteRow = async () => {
+      if (!contextMenu?.rowId || !tableMeta) return;
+      if (!window.confirm('确定要删除该行吗？')) return;
+      try {
+          await api.deleteRow(tableMeta.table_name, contextMenu.rowId);
+          onTableUpdate && onTableUpdate();
+          setContextMenu(null);
+      } catch (e) {
+          alert('删除行失败');
+      }
+  };
+
+  const handleAddColumn = async (position) => {
+      if (!tableMeta || !contextMenu?.colId) return;
+      const name = window.prompt('请输入新列名:');
+      if (!name) return;
+
+      try {
+          const res = await api.addColumn(tableMeta.table_name, name, 'TEXT');
+          const newCol = res.data.column;
+          
+          const currentCols = [...tableMeta.columns];
+          const refIndex = currentCols.findIndex(c => c.name === contextMenu.colId);
+          
+          if (position === 'left') {
+              currentCols.splice(refIndex, 0, newCol);
+          } else {
+              currentCols.splice(refIndex + 1, 0, newCol);
+          }
+          
+          await api.updateTable(tableMeta.id, { columns: currentCols });
+          // Must update meta first, then trigger data refresh or full update
+          // onTableUpdate should handle full refresh including columns
+          onTableUpdate && onTableUpdate({ ...tableMeta, columns: currentCols });
+          setContextMenu(null);
+      } catch (e) {
+          alert('添加列失败: ' + (e.response?.data?.error || e.message));
+      }
+  };
+
+  const handleDeleteColumn = async () => {
+       if (!tableMeta || !contextMenu?.colId) return;
+       if (!window.confirm(`确定要删除列 "${contextMenu.colId}" 吗？此操作不可恢复。`)) return;
+       try {
+           await api.deleteColumn(tableMeta.table_name, contextMenu.colId);
+           
+           const currentCols = tableMeta.columns.filter(c => c.name !== contextMenu.colId);
+           onTableUpdate && onTableUpdate({ ...tableMeta, columns: currentCols });
+           
+           setContextMenu(null);
+       } catch (e) {
+           alert('删除列失败');
+       }
+  };
+
+  const handleClearSelection = async () => {
+      if (!tableMeta || !selection.start || !selection.end) return;
+      
+      const minRow = Math.min(selection.start.row, selection.end.row);
+      const maxRow = Math.max(selection.start.row, selection.end.row);
+      const minCol = Math.min(selection.start.col, selection.end.col);
+      const maxCol = Math.max(selection.start.col, selection.end.col);
+
+      try {
+          // Iterate over selected cells
+          for (let r = minRow; r <= maxRow; r++) {
+              const row = data[r];
+              if (!row) continue;
+              
+              // Iterate columns
+              // colIndex 0 is index, so data col is colIndex - 1
+              for (let c = minCol; c <= maxCol; c++) {
+                  if (c === 0) continue; // Skip index column
+                  const colDef = tableMeta.columns[c - 1];
+                  if (colDef) {
+                      await api.updateCellValue(tableMeta.table_name, row.id, colDef.name, null);
+                  }
+              }
+          }
+          // Ideally we should batch this in backend, but for now simple loop
+          onTableUpdate && onTableUpdate();
+          setContextMenu(null);
+      } catch (e) {
+          alert('清空失败');
+      }
+  };
+
+  const handleCopySelection = () => {
       if (!selection.start || !selection.end) return;
 
       const minRow = Math.min(selection.start.row, selection.end.row);
@@ -496,14 +681,98 @@ export default function DataGrid({
       const rows = table.getRowModel().rows.slice(minRow, maxRow + 1);
       const text = rows.map(row => {
           const cells = row.getVisibleCells().filter((_, idx) => idx >= minCol && idx <= maxCol);
-          return cells.map(cell => cell.getValue()).join('\t');
+          return cells.map(cell => {
+              const val = cell.getValue();
+              return val === null ? '' : String(val);
+          }).join('\t');
       }).join('\n');
 
       navigator.clipboard.writeText(text).then(() => {
-          console.log('Copied to clipboard');
+          // Optional: show toast
+          setContextMenu(null);
       });
   };
 
+  const handleDeleteSelectedRows = async () => {
+      if (!tableMeta || !selection.start || !selection.end) return;
+      if (!window.confirm('确定要删除选中的行吗？')) return;
+
+      const minRow = Math.min(selection.start.row, selection.end.row);
+      const maxRow = Math.max(selection.start.row, selection.end.row);
+      
+      try {
+          for (let r = minRow; r <= maxRow; r++) {
+              const row = data[r];
+              if (row) {
+                  await api.deleteRow(tableMeta.table_name, row.id);
+              }
+          }
+          onTableUpdate && onTableUpdate();
+          setContextMenu(null);
+      } catch (e) {
+          alert('删除行失败');
+      }
+  };
+
+  const handleDeleteSelectedColumns = async () => {
+      if (!tableMeta || !selection.start || !selection.end) return;
+      
+      const minCol = Math.min(selection.start.col, selection.end.col);
+      const maxCol = Math.max(selection.start.col, selection.end.col);
+      
+      // Filter out index column (0)
+      const colIndices = [];
+      for (let c = minCol; c <= maxCol; c++) {
+          if (c > 0) colIndices.push(c - 1);
+      }
+      
+      if (colIndices.length === 0) return;
+      
+      const colNames = colIndices.map(idx => tableMeta.columns[idx]?.name).filter(Boolean);
+      if (colNames.length === 0) return;
+
+      if (!window.confirm(`确定要删除选中的 ${colNames.length} 列吗？`)) return;
+
+      try {
+          // Delete sequentially or extend API for batch
+          for (const colName of colNames) {
+              await api.deleteColumn(tableMeta.table_name, colName);
+          }
+          
+          const newColumns = tableMeta.columns.filter(c => !colNames.includes(c.name));
+          onTableUpdate && onTableUpdate({ ...tableMeta, columns: newColumns });
+          setContextMenu(null);
+      } catch (e) {
+          alert('删除列失败');
+      }
+  };
+
+  const handleContextMenu = (e, rowIndex, colIndex) => {
+      e.preventDefault();
+      
+      // If right click is OUTSIDE current selection, reset selection to just clicked cell
+      if (!isCellSelected(rowIndex, colIndex)) {
+          setSelection({ 
+              start: { row: rowIndex, col: colIndex }, 
+              end: { row: rowIndex, col: colIndex }, 
+              isDragging: false 
+          });
+      }
+      // If inside selection, keep selection (so we can apply bulk actions)
+
+      const rowId = data[rowIndex]?.id;
+      const colId = colIndex > 0 ? tableMeta.columns[colIndex - 1]?.name : null;
+
+      setContextMenu({
+          x: e.clientX,
+          y: e.clientY,
+          rowIndex,
+          colIndex,
+          rowId,
+          colId
+      });
+  };
+  
   // ... (Column Management remains)
   const handleColumnNameUpdate = (oldName, newOriginalName) => {
       if (!onTableUpdate || !tableMeta) return;
@@ -1037,6 +1306,37 @@ export default function DataGrid({
                 })
             )}
           </tbody>
+          <tfoot className="bg-gray-50 sticky bottom-0 z-30 border-t border-gray-200 shadow-[0_-1px_3px_rgba(0,0,0,0.05)]">
+            <tr>
+               {table.getVisibleLeafColumns().map((column, idx) => {
+                   const isIndex = column.id === '_index';
+                   if (isIndex) {
+                       return <td key={column.id} className="p-2 text-xs text-center text-gray-400 font-semibold bg-gray-50 border-r border-gray-200">统计</td>;
+                   }
+                   
+                   const colName = column.columnDef.accessorKey;
+                   const func = aggregates[colName];
+                   const result = aggregateResults[colName];
+                   
+                   return (
+                       <td key={column.id} className="border-r border-gray-200 last:border-r-0 bg-gray-50 h-10 p-0">
+                           <AggregateCell 
+                                value={result} 
+                                func={func} 
+                                onChange={(newFunc) => {
+                                    setAggregates(prev => {
+                                        const next = { ...prev };
+                                        if (!newFunc) delete next[colName];
+                                        else next[colName] = newFunc;
+                                        return next;
+                                    });
+                                }}
+                           />
+                       </td>
+                   );
+               })}
+            </tr>
+          </tfoot>
         </table>
       </div>
 
@@ -1120,6 +1420,77 @@ export default function DataGrid({
             </div>
         </div>
       </div>
+      
+      {/* Context Menu */}
+      {contextMenu && (
+        <div 
+            className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-xl py-1 w-52 text-sm animate-in fade-in zoom-in-95 duration-100"
+            style={{ top: Math.min(contextMenu.y, window.innerHeight - 350), left: Math.min(contextMenu.x, window.innerWidth - 250) }}
+            onClick={e => e.stopPropagation()}
+        >
+            <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50 border-b border-gray-100 mb-1">
+                操作 ({selection.start && selection.end ? (Math.abs(selection.end.row - selection.start.row) + 1) * (Math.abs(selection.end.col - selection.start.col) + 1) : 1} 个单元格)
+            </div>
+
+            <button 
+                onClick={handleCopySelection}
+                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+            >
+                <Copy size={14} className="text-gray-400" /> 复制内容
+            </button>
+            <button 
+                onClick={handleClearSelection}
+                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+            >
+                <Eraser size={14} className="text-gray-400" /> 清空数据
+            </button>
+
+            <div className="h-px bg-gray-100 my-1"></div>
+
+            <button 
+                onClick={() => handleAddRow('before')}
+                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+            >
+                <ArrowUp size={14} className="text-gray-400" /> 在上方插入行
+            </button>
+            <button 
+                onClick={() => handleAddRow('after')}
+                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+            >
+                <ArrowDown size={14} className="text-gray-400" /> 在下方插入行
+            </button>
+            <button 
+                onClick={handleDeleteSelectedRows}
+                className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2"
+            >
+                <Rows size={14} /> 删除选中行
+            </button>
+            
+            {contextMenu.colId && (
+                <>
+                    <div className="h-px bg-gray-100 my-1"></div>
+                    <button 
+                        onClick={() => handleAddColumn('left')}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+                    >
+                        <ChevronsLeft size={14} className="text-gray-400" /> 左侧插入列
+                    </button>
+                    <button 
+                        onClick={() => handleAddColumn('right')}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+                    >
+                        <ChevronsRight size={14} className="text-gray-400" /> 右侧插入列
+                    </button>
+                    <button 
+                        onClick={handleDeleteSelectedColumns}
+                        className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2"
+                    >
+                        <Columns size={14} /> 删除选中列
+                    </button>
+                </>
+            )}
+        </div>
+      )}
     </div>
   );
 }
