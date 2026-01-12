@@ -4,7 +4,7 @@ import {
   getCoreRowModel,
   flexRender,
 } from '@tanstack/react-table';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, Plus, Trash2, Download, Settings, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, Plus, Trash2, Download, Settings, ArrowUp, ArrowDown, ArrowUpDown, GripVertical, Eye, EyeOff, Layers } from 'lucide-react';
 
 /* --- Helper Components --- */
 
@@ -135,8 +135,8 @@ const FilterItem = ({ item, columns, onUpdate, onRemove }) => {
                  <option value="<=">小于等于</option>
                  <option value="LIKE">包含</option>
                  <option value="NOT LIKE">不包含</option>
-                 <option value="IS EMPTY">为空 (Is Empty)</option>
-                 <option value="IS NOT EMPTY">不为空 (Is Not Empty)</option>
+                 <option value="IS EMPTY">为空</option>
+                 <option value="IS NOT EMPTY">不为空</option>
             </select>
 
             {/* Hide value input for empty/not empty checks */}
@@ -184,15 +184,15 @@ const FilterGroup = ({ group, columns, onUpdate, onRemove, depth = 0 }) => {
              <div className="flex items-center gap-2 mb-2">
                  <div className="flex items-center bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded px-2 py-1 gap-2 transition-colors">
                      <span className="text-xs font-semibold text-gray-600 uppercase select-none">
-                        {depth === 0 ? 'Where' : 'Group:'}
+                        {depth === 0 ? '条件' : '条件组:'}
                      </span>
                      <select
                         className="text-xs border-none bg-transparent font-bold text-blue-700 focus:ring-0 cursor-pointer p-0 pr-6"
                         value={group.logic || 'AND'}
                         onChange={e => onUpdate({ ...group, logic: e.target.value })}
                      >
-                         <option value="AND">Matches ALL (AND)</option>
-                         <option value="OR">Matches ANY (OR)</option>
+                         <option value="AND">且 (AND)</option>
+                         <option value="OR">或 (OR)</option>
                      </select>
                      
                      <div className="h-4 w-px bg-gray-300 mx-1"></div>
@@ -314,7 +314,8 @@ export default function DataGrid({
     onExport, 
     onCellUpdate, 
     onManage,
-    onTableUpdate
+    onTableUpdate,
+    focusRowId = null
 }) {
   
   // -- View State -- //
@@ -329,6 +330,49 @@ export default function DataGrid({
   });
   const [sorts, setSorts] = useState(initialSorts);
   const [groups, setGroups] = useState(initialGroups);
+  const [columnVisibility, setColumnVisibility] = useState({});
+
+  const handleTabToggle = (tab) => {
+      if (showViewSettings && activeTab === tab) {
+          setShowViewSettings(false);
+      } else {
+          setActiveTab(tab);
+          setShowViewSettings(true);
+      }
+  };
+
+  // DnD Refs
+  const dragItem = useRef(null);
+  
+  const onSortDragStart = (e, index) => {
+      dragItem.current = index;
+      e.dataTransfer.effectAllowed = "move"; 
+  };
+  const onSortDragEnter = (e, index) => {
+      if (dragItem.current === null || dragItem.current === index) return;
+      const newSorts = [...sorts];
+      const draggedItem = newSorts[dragItem.current];
+      newSorts.splice(dragItem.current, 1);
+      newSorts.splice(index, 0, draggedItem);
+      setSorts(newSorts);
+      dragItem.current = index;
+  };
+  const onSortDragEnd = () => { dragItem.current = null; };
+
+  const onGroupDragStart = (e, index) => {
+      dragItem.current = index;
+      e.dataTransfer.effectAllowed = "move";
+  };
+  const onGroupDragEnter = (e, index) => {
+      if (dragItem.current === null || dragItem.current === index) return;
+      const newGroups = [...groups];
+      const draggedItem = newGroups[dragItem.current];
+      newGroups.splice(dragItem.current, 1);
+      newGroups.splice(index, 0, draggedItem);
+      setGroups(newGroups);
+      dragItem.current = index;
+  };
+  const onGroupDragEnd = () => { dragItem.current = null; };
 
   // Sync with props
   useEffect(() => {
@@ -342,7 +386,31 @@ export default function DataGrid({
     
     setSorts(initialSorts || []);
     setGroups(initialGroups || []);
+    setColumnVisibility({});
   }, [initialFilters, initialSorts, initialGroups, tableMeta?.id]);
+
+    const scrollContainerRef = useRef(null);
+    const [highlightRowId, setHighlightRowId] = useState(null);
+
+    useEffect(() => {
+        if (focusRowId === null || typeof focusRowId === 'undefined') return;
+
+        // Defer to next tick so the DOM for rows is present.
+        const handle = window.setTimeout(() => {
+            const container = scrollContainerRef.current;
+            if (!container) return;
+
+            const selector = `tr[data-row-id="${String(focusRowId)}"]`;
+            const rowEl = container.querySelector(selector);
+            if (rowEl && typeof rowEl.scrollIntoView === 'function') {
+                rowEl.scrollIntoView({ block: 'center' });
+                setHighlightRowId(focusRowId);
+                window.setTimeout(() => setHighlightRowId(null), 2500);
+            }
+        }, 0);
+
+        return () => window.clearTimeout(handle);
+    }, [focusRowId, data, currentPage, tableMeta?.id]);
 
   // Apply changes
   const applyViewChanges = () => {
@@ -491,6 +559,10 @@ export default function DataGrid({
   const table = useReactTable({
     data,
     columns,
+    state: {
+        columnVisibility
+    },
+    onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     manualPagination: true,
     pageCount: totalPages,
@@ -505,59 +577,100 @@ export default function DataGrid({
   if (!tableMeta) return <div className="p-10 text-center text-gray-500">请选择一个表格查看数据</div>;
 
   const filterCount = filters.items?.length || 0;
-  const hasViewChanges = filterCount > 0 || sorts.length > 0 || groups.length > 0;
+  const hiddenCount = Object.values(columnVisibility).filter(v => v === false).length;
+  const hasViewChanges = filterCount > 0 || sorts.length > 0 || groups.length > 0 || hiddenCount > 0;
 
   return (
     <div className="flex flex-col h-full bg-white shadow-sm rounded-lg overflow-hidden border border-gray-200">
       {/* Toolbar */}
-      <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-white">
-        <h2 className="text-lg font-semibold text-gray-800">{tableMeta.name}</h2>
-        <div className="flex items-center gap-2">
+      <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-white gap-4">
+        
+        {/* Left: Title + View Chips */}
+        <div className="flex items-center gap-4 flex-1 min-w-0">
+             <h2 className="text-lg font-semibold text-gray-800 whitespace-nowrap shrink-0">{tableMeta.name}</h2>
+             
+             {/* View Control Chips */}
+             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar mask-linear-fade pr-2">
+                 {/* Filter Chip */}
+                 <button 
+                    onClick={() => handleTabToggle('filter')}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-semibold border transition-all whitespace-nowrap ${
+                        showViewSettings && activeTab === 'filter'
+                            ? 'bg-orange-100/50 border-orange-300 text-orange-700 shadow-sm ring-1 ring-orange-200'
+                            : filterCount > 0 
+                                ? 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hover:border-orange-300' 
+                                : 'bg-white border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                    }`}
+                 >
+                    <Filter size={14} className={filterCount > 0 ? "fill-orange-500/20" : ""} />
+                    {filterCount > 0 ? `${filterCount} 筛选` : '筛选'}
+                 </button>
+
+                 {/* Sort Chip */}
+                 <button 
+                    onClick={() => handleTabToggle('sort')}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-semibold border transition-all whitespace-nowrap ${
+                        showViewSettings && activeTab === 'sort'
+                            ? 'bg-blue-100/50 border-blue-300 text-blue-700 shadow-sm ring-1 ring-blue-200'
+                            : sorts.length > 0
+                                ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 hover:border-blue-300' 
+                                : 'bg-white border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                    }`}
+                 >
+                    <ArrowUpDown size={14} />
+                    {sorts.length > 0 ? `${sorts.length} 排序` : '排序'}
+                 </button>
+
+                 {/* Group Chip */}
+                 <button 
+                    onClick={() => handleTabToggle('group')}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-semibold border transition-all whitespace-nowrap ${
+                        showViewSettings && activeTab === 'group'
+                            ? 'bg-purple-100/50 border-purple-300 text-purple-700 shadow-sm ring-1 ring-purple-200'
+                            : groups.length > 0
+                                ? 'bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100 hover:border-purple-300' 
+                                : 'bg-white border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                    }`}
+                 >
+                    <Layers size={14} /> 
+                    {groups.length > 0 ? `${groups.length} 分组` : '分组'}
+                 </button>
+
+                 {/* Hidden Chip */}
+                 <button 
+                    onClick={() => handleTabToggle('field')}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-semibold border transition-all whitespace-nowrap ${
+                        showViewSettings && activeTab === 'field'
+                            ? 'bg-gray-100 border-gray-300 text-gray-800 shadow-sm ring-1 ring-gray-200'
+                            : hiddenCount > 0
+                                ? 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 hover:border-gray-300' 
+                                : 'bg-white border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                    }`}
+                 >
+                    {hiddenCount > 0 ? <EyeOff size={14} /> : <Eye size={14} />}
+                    {hiddenCount > 0 ? `${hiddenCount} 隐藏` : '字段'}
+                 </button>
+             </div>
+        </div>
+        
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2 shrink-0">
           {onManage && (
-            <button onClick={onManage} className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">
-              <Settings size={16} /> 管理
+            <button onClick={onManage} className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 shadow-sm">
+              <Settings size={14} /> 管理
             </button>
           )}
           {onExport && (
-            <button onClick={onExport} className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">
-              <Download size={16} /> 导出
+            <button onClick={onExport} className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 shadow-sm">
+              <Download size={14} /> 导出
             </button>
           )}
-          <button 
-            onClick={() => setShowViewSettings(!showViewSettings)}
-            className={`flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md border ${showViewSettings ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
-          >
-            <Filter size={16} />
-            视图设置 {hasViewChanges && <span className="bg-blue-600 text-white text-[10px] px-1.5 rounded-full">!</span>}
-          </button>
         </div>
       </div>
 
       {/* Advanced View Settings Panel */}
       {showViewSettings && (
         <div className="bg-gray-50 border-b border-gray-200 animate-in slide-in-from-top-2 flex flex-col max-h-[60vh] shadow-lg relative z-20">
-            {/* Tabs */}
-            <div className="flex border-b border-gray-200 px-4 shrink-0 bg-gray-50">
-                <button 
-                    onClick={() => setActiveTab('filter')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'filter' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                    筛选 ({filterCount})
-                </button>
-                <button 
-                    onClick={() => setActiveTab('sort')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'sort' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                    排序 ({sorts.length})
-                </button>
-                <button 
-                    onClick={() => setActiveTab('group')}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'group' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                    分组 ({groups.length})
-                </button>
-            </div>
-
             {/* Scrollable Content */}
             <div className="p-4 overflow-y-auto flex-1 min-h-0 bg-gray-50/50">
                 {/* FILTER TAB */}
@@ -574,11 +687,24 @@ export default function DataGrid({
                 {/* SORT TAB */}
                 {activeTab === 'sort' && (
                     <div className="space-y-3">
+                        <div className="flex flex-col gap-2">
                         {sorts.map((s, idx) => (
-                            <div key={idx} className="flex items-center gap-2">
-                                <span className="text-sm text-gray-500 w-6">No.{idx + 1}</span>
+                            <div 
+                                key={idx} 
+                                draggable
+                                onDragStart={(e) => onSortDragStart(e, idx)}
+                                onDragEnter={(e) => onSortDragEnter(e, idx)}
+                                onDragEnd={onSortDragEnd}
+                                onDragOver={(e) => e.preventDefault()}
+                                className="flex items-center gap-2 p-2 bg-white border border-gray-200 rounded text-sm shadow-sm hover:border-blue-400 transition-colors"
+                            >
+                                <div className="text-gray-300 cursor-move hover:text-gray-600 transition-colors" title="拖拽排序">
+                                    <GripVertical size={14} />
+                                </div>
+                                <span className="text-xs font-bold text-gray-400 w-8 select-none">No.{idx + 1}</span>
+                                <div className="h-4 w-px bg-gray-200 mx-1"></div>
                                 <select 
-                                    className="text-sm border-gray-300 rounded-md shadow-sm"
+                                    className="text-sm border-gray-300 rounded shadow-sm py-1 focus:border-blue-500 focus:ring-blue-500 flex-1"
                                     value={s.column}
                                     onChange={e => updateSort(idx, 'column', e.target.value)}
                                 >
@@ -587,38 +713,132 @@ export default function DataGrid({
                                     ))}
                                 </select>
                                 <select 
-                                    className="text-sm border-gray-300 rounded-md shadow-sm"
+                                    className="text-sm border-gray-300 rounded shadow-sm py-1 focus:border-blue-500 focus:ring-blue-500 w-32"
                                     value={s.direction}
                                     onChange={e => updateSort(idx, 'direction', e.target.value)}
                                 >
                                     <option value="ASC">升序 (A-Z)</option>
                                     <option value="DESC">降序 (Z-A)</option>
                                 </select>
-                                <button onClick={() => removeSort(idx)} className="text-gray-400 hover:text-red-500">
+                                <button onClick={() => removeSort(idx)} className="text-gray-400 hover:text-red-500 ml-2 transition-colors">
                                     <Trash2 size={14} />
                                 </button>
                             </div>
                         ))}
-                        <button onClick={addSort} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800">
-                            <Plus size={14} /> 添加排序规则
+                        </div>
+                        <button onClick={addSort} className="text-xs text-gray-600 hover:text-blue-600 flex items-center gap-1 px-1 py-1 rounded hover:bg-white transition-colors w-fit border border-transparent hover:border-gray-200">
+                            <Plus size={12} /> 添加排序规则
                         </button>
                     </div>
                 )}
 
                 {/* GROUP TAB */}
                 {activeTab === 'group' && (
-                    <div>
-                        <div className="text-xs text-gray-500 mb-3">选择分组字段 (分组后将聚合显示数据)</div>
-                        <div className="flex flex-wrap gap-2">
-                            {tableMeta.columns.map(c => {
-                                const isActive = groups.includes(c.name);
+                    <div className="space-y-3">
+                        <div className="flex flex-col gap-2">
+                            {groups.map((gColumn, idx) => {
+                                const colDef = tableMeta.columns.find(c => c.name === gColumn);
                                 return (
+                                    <div 
+                                        key={idx} 
+                                        draggable
+                                        onDragStart={(e) => onGroupDragStart(e, idx)}
+                                        onDragEnter={(e) => onGroupDragEnter(e, idx)}
+                                        onDragEnd={onGroupDragEnd}
+                                        onDragOver={(e) => e.preventDefault()}
+                                        className="flex items-center gap-2 p-2 bg-white border border-gray-200 rounded text-sm shadow-sm justify-between hover:border-blue-400 transition-colors"
+                                    >
+                                        <div className="flex items-center gap-2 flex-1">
+                                            <div className="text-gray-300 cursor-move hover:text-gray-600 transition-colors" title="拖拽排序">
+                                                <GripVertical size={14} />
+                                            </div>
+                                            <span className="text-xs font-bold text-gray-400 w-12 select-none">Level {idx + 1}</span>
+                                            <div className="h-4 w-px bg-gray-200 mx-1"></div>
+                                            <span className="font-medium text-gray-700">{colDef ? colDef.original : gColumn}</span>
+                                        </div>
+                                        <button onClick={() => toggleGroup(gColumn)} className="text-gray-400 hover:text-red-500 transition-colors">
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {/* Add Group Logic */}
+                        <div className="pt-2 border-t border-gray-200 mt-2">
+                            <span className="text-xs text-gray-500 block mb-2">点击字段添加到分组:</span>
+                            <div className="flex flex-wrap gap-2">
+                                {tableMeta.columns.filter(c => !groups.includes(c.name)).map(c => (
                                     <button 
                                         key={c.name}
                                         onClick={() => toggleGroup(c.name)}
-                                        className={`px-3 py-1.5 text-sm rounded border transition-all ${isActive ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                                        className="px-2 py-1 text-xs rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-blue-600 hover:border-blue-200 transition-all flex items-center gap-1"
                                     >
+                                        <Plus size={10} />
                                         {c.original}
+                                    </button>
+                                ))}
+                                {tableMeta.columns.filter(c => !groups.includes(c.name)).length === 0 && (
+                                    <span className="text-xs text-gray-400 italic">所有字段已添加</span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* FIELD TAB */}
+                {activeTab === 'field' && (
+                    <div className="space-y-3">
+                         <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                             <span className="text-xs text-gray-500">点击并在选中状态下显示，灰色为隐藏</span>
+                             <div className="flex items-center gap-3">
+                                 <button 
+                                     onClick={() => {
+                                         const newVis = {};
+                                         tableMeta.columns.forEach(c => newVis[c.name] = false);
+                                         setColumnVisibility(newVis);
+                                     }}
+                                     className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                     disabled={hiddenCount === tableMeta.columns.length}
+                                     title="隐藏所有字段"
+                                 >
+                                     <EyeOff size={12} /> 隐藏所有
+                                 </button>
+                                 <div className="h-3 w-px bg-gray-200"></div>
+                                 <button 
+                                     onClick={() => setColumnVisibility({})}
+                                     className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                     disabled={hiddenCount === 0}
+                                     title="显示所有字段"
+                                 >
+                                     <Eye size={12} /> 显示所有
+                                 </button>
+                             </div>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                            {tableMeta.columns.map(col => {
+                                const isHidden = columnVisibility[col.name] === false;
+                                return (
+                                    <button
+                                        key={col.name}
+                                        onClick={() => setColumnVisibility(prev => ({
+                                            ...prev,
+                                            [col.name]: prev[col.name] === false ? true : false
+                                        }))}
+                                        className={`flex items-center gap-2 p-2 border rounded text-sm text-left transition-all ${
+                                            isHidden 
+                                                ? 'bg-gray-100/50 border-gray-200 text-gray-400' 
+                                                : 'bg-white border-blue-300 text-blue-700 shadow-sm ring-1 ring-blue-100/50'
+                                        }`}
+                                    >
+                                        {isHidden ? (
+                                            <EyeOff size={14} className="text-gray-400 shrink-0" />
+                                        ) : (
+                                            <Eye size={14} className="text-blue-500 shrink-0" />
+                                        )}
+                                        <span className={`truncate text-xs font-medium ${isHidden ? 'line-through decoration-gray-300' : ''}`}>
+                                            {col.original}
+                                        </span>
                                     </button>
                                 );
                             })}
@@ -654,7 +874,7 @@ export default function DataGrid({
       )}
 
       {/* Table Content */}
-      <div className="flex-1 overflow-auto bg-white relative select-none">
+            <div ref={scrollContainerRef} className="flex-1 overflow-auto bg-white relative select-none">
         <table className="text-left border-collapse" style={{ width: table.getTotalSize() }}>
           <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
             {table.getHeaderGroups().map(headerGroup => (
@@ -769,7 +989,14 @@ export default function DataGrid({
                     return (
                         <React.Fragment key={row.id}>
                             {groupRows}
-                            <tr className="hover:bg-blue-50 transition-colors group even:bg-gray-50/50">
+                            <tr
+                                data-row-id={row.original?.id}
+                                className={`hover:bg-blue-50 transition-colors group even:bg-gray-50/50 ${
+                                    highlightRowId !== null && String(row.original?.id) === String(highlightRowId)
+                                        ? 'bg-yellow-50 ring-2 ring-yellow-300'
+                                        : ''
+                                }`}
+                            >
                                 {row.getVisibleCells().map((cell, cIdx) => {
                                     const isSelected = isCellSelected(rIdx, cIdx);
                                     const isIndex = cell.column.id === '_index';

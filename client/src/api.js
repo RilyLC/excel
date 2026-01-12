@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 export const api = {
   getProjects: () => axios.get(`${API_URL}/projects`),
@@ -19,6 +19,9 @@ export const api = {
         groups: JSON.stringify(groups)
       } 
     }),
+
+  locateRow: (tableName, rowId, pageSize = 50) =>
+    axios.get(`${API_URL}/tables/${tableName}/rows/${rowId}/locate`, { params: { pageSize } }),
   deleteTable: (id) => axios.delete(`${API_URL}/tables/${id}`),
   updateTable: (id, data) => axios.put(`${API_URL}/tables/${id}`, data),
   

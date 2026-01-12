@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Play, Save, X, Database, Info, Loader2, Search } from 'lucide-react';
 import { api } from '../api';
 
-export default function QueryBuilder({ isOpen, onClose, tables, projects, onSaveSuccess }) {
+export default function QueryBuilder({ isOpen, onClose, tables, projects, onSaveSuccess, onShowAlert }) {
     const [sql, setSql] = useState('SELECT * FROM ');
     const [targetTableName, setTargetTableName] = useState('');
     const [targetProjectId, setTargetProjectId] = useState('null');
@@ -66,7 +66,9 @@ export default function QueryBuilder({ isOpen, onClose, tables, projects, onSave
                 targetTableName, 
                 targetProjectId === 'null' ? null : targetProjectId
             );
-            alert('查询执行成功并已保存为新表！');
+            if (onShowAlert) {
+                onShowAlert('查询执行成功并已保存为新表！', 'success');
+            }
             onSaveSuccess();
         } catch (err) {
             console.error(err);
@@ -75,6 +77,7 @@ export default function QueryBuilder({ isOpen, onClose, tables, projects, onSave
             setIsExecuting(false);
         }
     };
+
 
     const insertTableName = (name) => {
         setSql(prev => prev + `"${name}" `);

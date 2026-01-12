@@ -88,6 +88,8 @@ exports.importExcel = (buffer, originalFilename, projectId = null) => {
   const sheet = workbook.Sheets[sheetName];
   
   // Convert to JSON to get headers and data
+  // Use header: 1 to get array of arrays for CSV handling robustness, or stick to sheet_to_json
+  // For CSV/XLS compatibility, sheet_to_json works well if sheet is parsed correctly.
   const data = xlsx.utils.sheet_to_json(sheet, { defval: null });
   
   if (data.length === 0) {
@@ -148,6 +150,7 @@ exports.importExcel = (buffer, originalFilename, projectId = null) => {
     for (const row of data) {
       const values = columns.map(col => {
         let val = row[col.original];
+        // Handle boolean conversion for SQLite
         if (col.type === 'INTEGER' && typeof val === 'boolean') val = val ? 1 : 0;
         return val;
       });
@@ -155,10 +158,16 @@ exports.importExcel = (buffer, originalFilename, projectId = null) => {
     }
 
     // 3. Register in Meta Table
+    // Strip extension from filename for display name
+    const name = originalFilename.replace(/\.[^/.]+$/, "");
+    
+    // Handle explicit null string or null value for projectId
+    const pid = (projectId === 'null' || projectId === 'undefined' || projectId === '') ? null : projectId;
+
     db.prepare(`
       INSERT INTO _app_tables (name, table_name, columns, project_id)
       VALUES (?, ?, ?, ?)
-    `).run(originalFilename.replace(/\.xlsx$/i, ''), tableName, JSON.stringify(columns), projectId);
+    `).run(name, tableName, JSON.stringify(columns), pid);
 
     return { tableName, columns };
   });

@@ -2,3 +2,6 @@
 /.trae
 /start.bat
 /node_modules
+/release
+/server/node_modules
+/server/public

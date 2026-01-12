@@ -1,10 +1,17 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Upload, X, Loader2 } from 'lucide-react';
 
-export default function UploadModal({ isOpen, onClose, onUpload }) {
+export default function UploadModal({ isOpen, onClose, onUpload, projects = [], initialProjectId = 'null' }) {
   const fileInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId); 
+
+  useEffect(() => {
+      if (isOpen) {
+          setSelectedProjectId(initialProjectId);
+      }
+  }, [isOpen, initialProjectId]);
 
   if (!isOpen) return null;
 
@@ -17,6 +24,8 @@ export default function UploadModal({ isOpen, onClose, onUpload }) {
 
     const formData = new FormData();
     formData.append('file', file);
+    // Explicitly append project ID
+    formData.append('projectId', selectedProjectId === 'null' ? '' : selectedProjectId);
 
     try {
       await onUpload(formData);
@@ -25,7 +34,6 @@ export default function UploadModal({ isOpen, onClose, onUpload }) {
       setError(err.response?.data?.error || '上传失败');
     } finally {
       setIsUploading(false);
-      // Reset input value to allow re-uploading the same file if needed (e.g. after error)
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -42,10 +50,25 @@ export default function UploadModal({ isOpen, onClose, onUpload }) {
           <X size={20} />
         </button>
 
-        <h3 className="text-xl font-bold text-gray-900 mb-2">导入 Excel</h3>
-        <p className="text-sm text-gray-500 mb-6">
-          上传 .xlsx 文件以自动创建新表。
+        <h3 className="text-xl font-bold text-gray-900 mb-2">导入表格</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          支持 .xlsx, .xls, .csv 格式。
         </p>
+
+        {/* Project Selection */}
+        <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">导入到项目</label>
+            <select 
+                className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                value={selectedProjectId}
+                onChange={e => setSelectedProjectId(e.target.value)}
+            >
+                <option value="null">未分类</option>
+                {projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+            </select>
+        </div>
 
         <div 
           onClick={() => fileInputRef.current?.click()}
@@ -58,7 +81,7 @@ export default function UploadModal({ isOpen, onClose, onUpload }) {
             type="file" 
             ref={fileInputRef}
             onChange={handleFileChange}
-            accept=".xlsx"
+            accept=".xlsx, .xls, .csv"
             className="hidden" 
           />
           
@@ -70,8 +93,8 @@ export default function UploadModal({ isOpen, onClose, onUpload }) {
           ) : (
             <div className="flex flex-col items-center gap-2 text-gray-600">
               <Upload size={32} className="text-blue-500" />
-              <span className="text-sm font-medium">点击上传</span>
-              <span className="text-xs text-gray-400">支持格式: .xlsx</span>
+              <span className="text-sm font-medium">点击上传文件</span>
+              <span className="text-xs text-gray-400">支持 Excel / CSV</span>
             </div>
           )}
         </div>
