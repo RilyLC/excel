@@ -3,6 +3,8 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const tableService = require('./services/tableService');
+const authService = require('./services/authService');
+const { authenticateToken } = require('./middleware/authMiddleware');
 const db = require('./db');
 
 const app = express();
@@ -17,10 +19,37 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // Routes
 
+// --- Auth Routes (Public) ---
+app.post('/api/auth/register', (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+        const user = authService.register(username, password);
+        res.json(user);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.post('/api/auth/login', (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+        const result = authService.login(username, password);
+        res.json(result);
+    } catch (err) {
+        res.status(401).json({ error: err.message });
+    }
+});
+
+// --- Middleware for Protected Routes ---
+// Apply to all /api routes defined BELOW this point
+app.use('/api', authenticateToken);
+
 // Projects API
 app.get('/api/projects', (req, res) => {
     try {
-        const projects = tableService.getAllProjects();
+        const projects = tableService.getAllProjects(req.user.id);
         res.json(projects);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -31,7 +60,7 @@ app.post('/api/projects', (req, res) => {
     try {
         const { name, description } = req.body;
         if (!name) return res.status(400).json({ error: 'Project name is required' });
-        const project = tableService.createProject(name, description);
+        const project = tableService.createProject(name, description, req.user.id);
         res.json(project);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -41,7 +70,7 @@ app.post('/api/projects', (req, res) => {
 app.put('/api/projects/:id', (req, res) => {
     try {
         const { name, description } = req.body;
-        const result = tableService.updateProject(req.params.id, name, description);
+        const result = tableService.updateProject(req.params.id, name, description, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -51,7 +80,7 @@ app.put('/api/projects/:id', (req, res) => {
 app.delete('/api/projects/:id', (req, res) => {
     try {
         const deleteTables = req.query.deleteTables === 'true';
-        tableService.deleteProject(req.params.id, deleteTables);
+        tableService.deleteProject(req.params.id, deleteTables, req.user.id);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -63,7 +92,7 @@ app.get('/api/tables', (req, res) => {
   try {
     // If projectId is 'uncategorized' string, pass it directly
     const projectId = req.query.projectId === 'uncategorized' ? 'uncategorized' : (req.query.projectId ? parseInt(req.query.projectId) : null);
-    const tables = tableService.getAllTables(projectId);
+    const tables = tableService.getAllTables(projectId, req.user.id);
     res.json(tables);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -74,7 +103,7 @@ app.get('/api/tables', (req, res) => {
 app.put('/api/tables/:id', (req, res) => {
     try {
         const { id } = req.params;
-        const result = tableService.updateTableMeta(id, req.body);
+        const result = tableService.updateTableMeta(id, req.body, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -90,7 +119,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     const originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     const projectId = req.body.projectId ? parseInt(req.body.projectId) : null;
     
-    const result = tableService.importExcel(req.file.buffer, originalname, projectId);
+    const result = tableService.importExcel(req.file.buffer, originalname, projectId, req.user.id);
     res.json(result);
   } catch (err) {
     console.error(err);
@@ -120,7 +149,7 @@ app.get('/api/tables/:tableName/data', (req, res) => {
         try { groups = JSON.parse(req.query.groups); } catch (e) { console.error('Group parse error', e); }
     }
 
-    const result = tableService.getTableData(tableName, page, pageSize, filters, sorts, groups);
+    const result = tableService.getTableData(tableName, page, pageSize, filters, sorts, groups, req.user.id);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -141,7 +170,7 @@ app.get('/api/tables/:tableName/aggregates', (req, res) => {
             try { aggregates = JSON.parse(req.query.aggregates); } catch (e) { console.error('Aggregates parse error', e); }
         }
 
-        const result = tableService.getTableAggregates(tableName, filters, aggregates);
+        const result = tableService.getTableAggregates(tableName, filters, aggregates, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -159,6 +188,10 @@ app.get('/api/tables/:tableName/rows/:id/locate', (req, res) => {
         if (typeof tableName !== 'string' || tableName.includes('"')) {
             return res.status(400).json({ error: 'Invalid table name' });
         }
+        
+        // Verify ownership manually since this logic is inline
+        const isOwned = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, req.user.id);
+        if (!isOwned) return res.status(404).json({ error: 'Table not found or permission denied' });
 
         const exists = db.prepare(`SELECT 1 as ok FROM "${tableName}" WHERE id = ? LIMIT 1`).get(rowId);
         if (!exists) return res.status(404).json({ error: 'Row not found' });
@@ -178,7 +211,7 @@ app.get('/api/tables/:tableName/rows/:id/locate', (req, res) => {
 // 4. Delete Table
 app.delete('/api/tables/:id', (req, res) => {
   try {
-    tableService.deleteTable(req.params.id);
+    tableService.deleteTable(req.params.id, req.user.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -191,7 +224,7 @@ app.put('/api/tables/:tableName/rows/:id', (req, res) => {
         const { tableName, id } = req.params;
         const { column, value } = req.body; 
         
-        tableService.updateCellValue(tableName, id, column, value);
+        tableService.updateCellValue(tableName, id, column, value, req.user.id);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -202,7 +235,7 @@ app.put('/api/tables/:tableName/rows/:id', (req, res) => {
 app.get('/api/tables/:tableName/export', (req, res) => {
     try {
         const { tableName } = req.params;
-        const result = tableService.exportTable(tableName);
+        const result = tableService.exportTable(tableName, req.user.id);
         
         // Encode filename for header
         const filename = encodeURIComponent(result.filename);
@@ -228,8 +261,8 @@ app.get('/api/search', (req, res) => {
             : (filtersRaw && typeof filtersRaw === 'object' && Array.isArray(filtersRaw.items) && filtersRaw.items.length > 0);
         if (!query && !hasAnyFilter) return res.json([]);
 
-        // Get all tables to search through
-        let tables = tableService.getAllTables();
+        // Get all tables to search through (scoped to user)
+        let tables = tableService.getAllTables(null, req.user.id);
         
         // Filter by project scope if requested
         if (projectIdsRaw) {
@@ -241,7 +274,7 @@ app.get('/api/search', (req, res) => {
                 scopes = String(projectIdsRaw).split(',').map(s => s.trim()).filter(Boolean);
             }
             if (Array.isArray(scopes) && scopes.length > 0) {
-                tables = tableService.getAllTables(scopes);
+                tables = tableService.getAllTables(scopes, req.user.id);
             } else {
                 // Explicitly scoped to nothing => no results
                 return res.json([]);
@@ -249,7 +282,7 @@ app.get('/api/search', (req, res) => {
         } else if (projectId) {
             const scopeId = projectId === 'uncategorized' ? 'uncategorized' : parseInt(projectId);
             if (!isNaN(scopeId) || scopeId === 'uncategorized') {
-                tables = tableService.getAllTables(scopeId);
+                tables = tableService.getAllTables(scopeId, req.user.id);
             }
         }
 
@@ -409,7 +442,7 @@ app.post('/api/query/save', (req, res) => {
         const { sql, tableName, projectId } = req.body;
         if (!sql || !tableName) return res.status(400).json({ error: 'SQL and tableName are required' });
         
-        const result = tableService.executeQueryAndSave(sql, tableName, projectId);
+        const result = tableService.executeQueryAndSave(sql, tableName, projectId, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -422,7 +455,7 @@ app.post('/api/query/preview', (req, res) => {
         const { sql } = req.body;
         if (!sql) return res.status(400).json({ error: 'SQL is required' });
         
-        const result = tableService.previewQuery(sql);
+        const result = tableService.previewQuery(sql, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -442,7 +475,7 @@ app.post('/api/tables/:tableName/rows', (req, res) => {
             position = req.body.position;
         }
 
-        const result = tableService.addRow(tableName, rowData, position);
+        const result = tableService.addRow(tableName, rowData, position, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -453,7 +486,7 @@ app.post('/api/tables/:tableName/rows', (req, res) => {
 app.delete('/api/tables/:tableName/rows/:id', (req, res) => {
     try {
         const { tableName, id } = req.params;
-        const result = tableService.deleteRow(tableName, id);
+        const result = tableService.deleteRow(tableName, id, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -467,7 +500,7 @@ app.post('/api/tables/:tableName/columns', (req, res) => {
         const { name, type } = req.body;
         if (!name) return res.status(400).json({ error: 'Column name is required' });
         
-        const result = tableService.addColumn(tableName, name, type);
+        const result = tableService.addColumn(tableName, name, type, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -478,7 +511,7 @@ app.post('/api/tables/:tableName/columns', (req, res) => {
 app.delete('/api/tables/:tableName/columns/:columnName', (req, res) => {
     try {
         const { tableName, columnName } = req.params;
-        const result = tableService.deleteColumn(tableName, columnName);
+        const result = tableService.deleteColumn(tableName, columnName, req.user.id);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });

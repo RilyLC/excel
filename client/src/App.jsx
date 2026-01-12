@@ -7,7 +7,7 @@ import ConfirmModal from './components/ConfirmModal';
 import PromptModal from './components/PromptModal';
 import AlertModal from './components/AlertModal';
 import { api } from './api';
-import { Search, Loader2, Filter, Plus, Trash2, Download, Database as DatabaseIcon } from 'lucide-react';
+import { Search, Loader2, Filter, Plus, Trash2, Download, Database as DatabaseIcon, LogOut } from 'lucide-react';
 import QueryBuilder from './components/QueryBuilder';
 
 /* --- Global Search Filter Components (supports parentheses via groups) --- */
@@ -163,7 +163,7 @@ const GlobalFilterGroup = ({ group, columns, onUpdate, onRemove, depth = 0 }) =>
     );
 };
 
-function App() {
+function App({ onLogout }) {
   const [tables, setTables] = useState([]);
   const [activeTable, setActiveTable] = useState(null);
   
@@ -230,6 +230,9 @@ function App() {
 
   // Load history on mount
   useEffect(() => {
+    // 检查项目加载是否需要token（应该在上层处理了，但为了保险起见）
+    // 如果没有token，api会拦截并redirect
+    
       const history = localStorage.getItem('searchHistory');
       if (history) {
           try {
@@ -703,11 +706,22 @@ function App() {
                     </button>
                 </form>
             </div>
-            {/* <div className="flex items-center gap-4">
-                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">
-                 
+            
+            <div className="flex items-center gap-3 pl-4 border-l border-gray-200 ml-4">
+                <div className="flex flex-col items-end">
+                    <span className="text-sm font-semibold text-gray-700">
+                        {JSON.parse(localStorage.getItem('user') || '{}').username || 'User'}
+                    </span>
+                    <span className="text-xs text-gray-500">管理员</span>
                 </div>
-            </div> */}
+                <button 
+                    onClick={onLogout}
+                    className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                    title="退出登录"
+                >
+                    <LogOut size={18} />
+                </button>
+            </div>
           </div>
 
           {/* Advanced Search Panel */}

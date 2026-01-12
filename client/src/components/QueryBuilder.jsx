@@ -141,9 +141,9 @@ export default function QueryBuilder({ isOpen, onClose, tables, projects, onSave
                         <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-4 flex gap-3 text-sm text-blue-700">
                             <Info size={18} className="shrink-0 mt-0.5" />
                             <div>
-                                支持标准 SQLite 语法。您可以执行 JOIN, UNION, GROUP BY 等复杂查询。
+                                支持标准 SQLite 语法。您可以执行 JOIN, UNION, GROUP BY 等复杂查询，但只能够执行查询语句。
                                 <br />
-                                示例: <code>SELECT A.name, B.salary FROM "t_users" A JOIN "t_salaries" B ON A.id = B.user_id</code>
+                                需注意,在使用别名时不要使用t_开头的名称,因为这可能导致权限检查失败。
                             </div>
                         </div>
 

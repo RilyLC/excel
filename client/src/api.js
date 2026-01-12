@@ -2,16 +2,35 @@ import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
-export const api = {
-  getProjects: () => axios.get(`${API_URL}/projects`),
-  createProject: (data) => axios.post(`${API_URL}/projects`, data),
-  updateProject: (id, data) => axios.put(`${API_URL}/projects/${id}`, data),
-  deleteProject: (id, deleteTables = false) => axios.delete(`${API_URL}/projects/${id}`, { params: { deleteTables } }),
+const client = axios.create({ baseURL: API_URL });
 
-  getTables: (projectId) => axios.get(`${API_URL}/tables`, { params: { projectId } }),
-  uploadFile: (formData) => axios.post(`${API_URL}/upload`, formData),
+client.interceptors.request.use(config => {
+  const token = localStorage.getItem('token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+client.interceptors.response.use(res => res, err => {
+  if (err.response?.status === 401 && localStorage.getItem('token')) {
+    localStorage.removeItem('token');
+    window.location.reload();
+  }
+  return Promise.reject(err);
+});
+
+export const api = {
+  login: (username, password) => axios.post(`${API_URL}/auth/login`, { username, password }),
+  register: (username, password) => axios.post(`${API_URL}/auth/register`, { username, password }),
+
+  getProjects: () => client.get('/projects'),
+  createProject: (data) => client.post('/projects', data),
+  updateProject: (id, data) => client.put(`/projects/${id}`, data),
+  deleteProject: (id, deleteTables = false) => client.delete(`/projects/${id}`, { params: { deleteTables } }),
+
+  getTables: (projectId) => client.get('/tables', { params: { projectId } }),
+  uploadFile: (formData) => client.post('/upload', formData),
   getTableData: (tableName, page, pageSize, filters, sorts = [], groups = []) => 
-    axios.get(`${API_URL}/tables/${tableName}/data`, { 
+    client.get(`/tables/${tableName}/data`, { 
       params: { 
         page, 
         pageSize,
@@ -22,7 +41,7 @@ export const api = {
     }),
 
   getTableAggregates: (tableName, filters, aggregates) =>
-    axios.get(`${API_URL}/tables/${tableName}/aggregates`, {
+    client.get(`/tables/${tableName}/aggregates`, {
         params: {
             filters: JSON.stringify(filters || []),
             aggregates: JSON.stringify(aggregates || {})
@@ -30,15 +49,15 @@ export const api = {
     }),
 
   locateRow: (tableName, rowId, pageSize = 50) =>
-    axios.get(`${API_URL}/tables/${tableName}/rows/${rowId}/locate`, { params: { pageSize } }),
-  deleteTable: (id) => axios.delete(`${API_URL}/tables/${id}`),
-  updateTable: (id, data) => axios.put(`${API_URL}/tables/${id}`, data),
+    client.get(`/tables/${tableName}/rows/${rowId}/locate`, { params: { pageSize } }),
+  deleteTable: (id) => client.delete(`/tables/${id}`),
+  updateTable: (id, data) => client.put(`/tables/${id}`, data),
   
   // projectScope:
   // - null/undefined => all projects
   // - 'uncategorized' or number/string => single scope (backward compatible)
   // - array => multiple scopes (e.g. ['uncategorized', '1', '2'])
-  search: (query, filters, projectScope) => axios.get(`${API_URL}/search`, {
+  search: (query, filters, projectScope) => client.get('/search', {
     params: {
       q: query,
       filters: JSON.stringify(filters || []),
@@ -48,23 +67,23 @@ export const api = {
   }),
 
   updateCellValue: (tableName, rowId, column, value) => 
-    axios.put(`${API_URL}/tables/${tableName}/rows/${rowId}`, { column, value }),
+    client.put(`/tables/${tableName}/rows/${rowId}`, { column, value }),
 
   exportTable: (tableName) => 
-    axios.get(`${API_URL}/tables/${tableName}/export`, { responseType: 'blob' }),
+    client.get(`/tables/${tableName}/export`, { responseType: 'blob' }),
 
   saveQueryAsTable: (sql, tableName, projectId) => 
-    axios.post(`${API_URL}/query/save`, { sql, tableName, projectId }),
+    client.post('/query/save', { sql, tableName, projectId }),
 
-  previewQuery: (sql) => axios.post(`${API_URL}/query/preview`, { sql }),
+  previewQuery: (sql) => client.post('/query/preview', { sql }),
 
   addRow: (tableName, rowData, position = null) => {
       if (position) {
-          return axios.post(`${API_URL}/tables/${tableName}/rows`, { data: rowData, position });
+          return client.post(`/tables/${tableName}/rows`, { data: rowData, position });
       }
-      return axios.post(`${API_URL}/tables/${tableName}/rows`, rowData);
+      return client.post(`/tables/${tableName}/rows`, rowData);
   },
-  deleteRow: (tableName, rowId) => axios.delete(`${API_URL}/tables/${tableName}/rows/${rowId}`),
-  addColumn: (tableName, name, type) => axios.post(`${API_URL}/tables/${tableName}/columns`, { name, type }),
-  deleteColumn: (tableName, columnName) => axios.delete(`${API_URL}/tables/${tableName}/columns/${columnName}`),
+  deleteRow: (tableName, rowId) => client.delete(`/tables/${tableName}/rows/${rowId}`),
+  addColumn: (tableName, name, type) => client.post(`/tables/${tableName}/columns`, { name, type }),
+  deleteColumn: (tableName, columnName) => client.delete(`/tables/${tableName}/columns/${columnName}`),
 };

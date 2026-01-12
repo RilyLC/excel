@@ -26,18 +26,29 @@ function inferType(value) {
 }
 
 // Projects
-exports.createProject = (name, description) => {
-    const stmt = db.prepare('INSERT INTO projects (name, description) VALUES (?, ?)');
-    const info = stmt.run(name, description);
-    return { id: info.lastInsertRowid, name, description };
+exports.createProject = (name, description, userId) => {
+    const stmt = db.prepare('INSERT INTO projects (name, description, user_id) VALUES (?, ?, ?)');
+    const info = stmt.run(name, description, userId);
+    return { id: info.lastInsertRowid, name, description, user_id: userId };
 };
 
-exports.getAllProjects = () => {
-    return db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
+exports.getAllProjects = (userId) => {
+    return db.prepare('SELECT * FROM projects WHERE user_id = ? ORDER BY created_at DESC').all(userId);
 };
 
-exports.deleteProject = (id, deleteTables = false) => {
+exports.deleteProject = (id, deleteTables = false, userId) => {
     return db.transaction(() => {
+        // Verify ownership
+        const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(id, userId);
+        if (!project) {
+            // Check if it exists at all to give better error? Or just act idempotent.
+            // For security, just say not found or success (idempotent).
+            // Let's assume strict check.
+            const exists = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+            if (exists) throw new Error('Permission denied');
+            return; // Not found, ignore
+        }
+
         if (deleteTables) {
             // Find all tables in this project
             const tables = db.prepare('SELECT id, table_name FROM _app_tables WHERE project_id = ?').all(id);
@@ -52,7 +63,7 @@ exports.deleteProject = (id, deleteTables = false) => {
     })();
 };
 
-exports.updateProject = (id, name, description) => {
+exports.updateProject = (id, name, description, userId) => {
     const updates = [];
     const params = [];
     
@@ -69,14 +80,27 @@ exports.updateProject = (id, name, description) => {
     if (updates.length === 0) return { success: true };
     
     params.push(id);
-    const sql = `UPDATE projects SET ${updates.join(', ')} WHERE id = ?`;
+    params.push(userId);
+    const sql = `UPDATE projects SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`;
     const info = db.prepare(sql).run(...params);
+    
+    // Check if updated anything
+    if (info.changes === 0) {
+         const exists = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+         if (exists) throw new Error('Permission denied or no changes');
+         // else not found
+    }
+    
     return { success: info.changes > 0 };
 };
 
-exports.updateTableMeta = (id, { name, projectId, columns }) => {
+exports.updateTableMeta = (id, { name, projectId, columns }, userId) => {
     const updates = [];
     const params = [];
+
+    // Verify ownership
+    const table = db.prepare('SELECT id FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+    if (!table) throw new Error('Table not found or permission denied');
     
     if (name) {
         updates.push('name = ?');
@@ -99,12 +123,12 @@ exports.updateTableMeta = (id, { name, projectId, columns }) => {
     if (updates.length === 0) return { success: true };
     
     params.push(id);
-    const sql = `UPDATE _app_tables SET ${updates.join(', ')} WHERE id = ?`;
+    const sql = `UPDATE _app_tables SET ${updates.join(', ')} WHERE id = ?`; // Already verified ownership
     const info = db.prepare(sql).run(...params);
     return { success: info.changes > 0 };
 };
 
-exports.importExcel = (buffer, originalFilename, projectId = null) => {
+exports.importExcel = (buffer, originalFilename, projectId = null, userId) => {
   const workbook = xlsx.read(buffer, { type: 'buffer' });
   const sheetName = workbook.SheetNames[0]; // Import first sheet only for now
   const sheet = workbook.Sheets[sheetName];
@@ -187,9 +211,9 @@ exports.importExcel = (buffer, originalFilename, projectId = null) => {
     const pid = (projectId === 'null' || projectId === 'undefined' || projectId === '') ? null : projectId;
 
     db.prepare(`
-      INSERT INTO _app_tables (name, table_name, columns, project_id)
-      VALUES (?, ?, ?, ?)
-    `).run(name, tableName, JSON.stringify(columns), pid);
+      INSERT INTO _app_tables (name, table_name, columns, project_id, user_id)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(name, tableName, JSON.stringify(columns), pid, userId);
 
     return { tableName, columns };
   });
@@ -197,10 +221,10 @@ exports.importExcel = (buffer, originalFilename, projectId = null) => {
   return createTableTransaction();
 };
 
-exports.getAllTables = (projectId = null) => {
+exports.getAllTables = (projectId = null, userId) => {
     try {
-        let sql = 'SELECT * FROM _app_tables ';
-        const params = [];
+        let sql = 'SELECT * FROM _app_tables WHERE user_id = ? ';
+        const params = [userId];
 
         // Multi-scope support: array of project IDs and/or 'uncategorized'
         if (Array.isArray(projectId)) {
@@ -219,15 +243,14 @@ exports.getAllTables = (projectId = null) => {
                         params.push(...numericIds);
                 }
 
-                if (clauses.length === 0) {
-                        // No valid scopes selected
-                        return [];
+                if (clauses.length > 0) {
+                    sql += `AND (${clauses.join(' OR ')}) `;
                 }
-                sql += `WHERE (${clauses.join(' OR ')}) `;
+                // If clauses invalid, maybe return empty? But here we are already filtering by user_id so it's safe to show "nothing inside this project selection"
         } else if (projectId === 'uncategorized' || projectId === -1) {
-                sql += 'WHERE project_id IS NULL ';
+                sql += 'AND project_id IS NULL ';
         } else if (projectId) {
-                sql += 'WHERE project_id = ? ';
+                sql += 'AND project_id = ? ';
                 params.push(projectId);
         }
 
@@ -322,11 +345,11 @@ function buildWhereClause(filters, params) {
     return whereClause;
 }
 
-exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts = [], groups = []) => {
-    // Verify tableName exists in _app_tables to prevent SQL injection
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
+exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts = [], groups = [], userId) => {
+    // Verify tableName exists in _app_tables AND belongs to user
+    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
     if (!tableExists) {
-        throw new Error(`Table ${tableName} not found`);
+        throw new Error(`Table ${tableName} not found or permission denied`);
     }
 
     // Check if _sort_order exists
@@ -400,11 +423,11 @@ exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts 
     };
 };
 
-exports.getTableAggregates = (tableName, filters = [], aggregates = {}) => {
+exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId) => {
     // Verify tableName exists
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
+    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
     if (!tableExists) {
-        throw new Error(`Table ${tableName} not found`);
+        throw new Error(`Table ${tableName} not found or permission denied`);
     }
 
     const params = [];
@@ -442,9 +465,10 @@ exports.getTableAggregates = (tableName, filters = [], aggregates = {}) => {
     }
 };
 
-exports.deleteTable = (id) => {
-    const table = db.prepare('SELECT table_name FROM _app_tables WHERE id = ?').get(id);
-    if (!table) throw new Error('Table not found');
+exports.deleteTable = (id, userId) => {
+    // Verify ownership
+    const table = db.prepare('SELECT table_name FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+    if (!table) throw new Error('Table not found or permission denied');
 
     const dropTransaction = db.transaction(() => {
         db.exec(`DROP TABLE IF EXISTS "${table.table_name}"`);
@@ -454,10 +478,10 @@ exports.deleteTable = (id) => {
     return dropTransaction();
 };
 
-exports.updateCellValue = (tableName, rowId, column, value) => {
-    // Verify table exists
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
-    if (!tableExists) throw new Error(`Table ${tableName} not found`);
+exports.updateCellValue = (tableName, rowId, column, value, userId) => {
+    // Verify table exists AND belongs to user
+    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    if (!tableExists) throw new Error(`Table ${tableName} not found or permission denied`);
 
     // Update
     const stmt = db.prepare(`UPDATE "${tableName}" SET "${column}" = ? WHERE id = ?`);
@@ -466,10 +490,10 @@ exports.updateCellValue = (tableName, rowId, column, value) => {
     return { success: info.changes > 0 };
 };
 
-exports.exportTable = (tableName) => {
+exports.exportTable = (tableName, userId) => {
     // Verify table exists and get display name
-    const tableMeta = db.prepare('SELECT name, columns FROM _app_tables WHERE table_name = ?').get(tableName);
-    if (!tableMeta) throw new Error(`Table ${tableName} not found`);
+    const tableMeta = db.prepare('SELECT name, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    if (!tableMeta) throw new Error(`Table ${tableName} not found or permission denied`);
 
     // Get Data
     const rows = db.prepare(`SELECT * FROM "${tableName}"`).all();
@@ -502,24 +526,60 @@ exports.exportTable = (tableName) => {
     };
 };
 
-exports.executeQueryAndSave = (sql, newTableName, projectId = null) => {
-    // Basic SQL validation to prevent DROP/DELETE/UPDATE/INSERT (Read-onlyish, but we are creating a table)
-    // We allow SELECT. We will wrap this in CREATE TABLE AS SELECT or similar logic.
-    // Use word boundary check to avoid false positives (e.g. "created_at" containing "CREATE")
-    
-    const forbidden = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE', 'REPLACE', 'CREATE', 'PRAGMA'];
+const validateReadOnlySelect = (sql, userId) => {
+    // 1. Basic Keyword Check
+    const forbidden = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE', 'REPLACE', 'CREATE', 'PRAGMA', 'VACUUM', 'ATTACH', 'DETACH', 'GRANT', 'REVOKE', 'COMMIT', 'ROLLBACK'];
     const upperSql = sql.toUpperCase();
     
-    // Check for forbidden keywords with word boundaries
     const hasForbidden = forbidden.some(word => {
-        // Regex: \bWORD\b (word boundary)
-        // We escape the word just in case, though these are simple uppercase letters
         const regex = new RegExp(`\\b${word}\\b`);
         return regex.test(upperSql);
     });
 
     if (hasForbidden) {
-        throw new Error('Only SELECT queries are allowed for creating new tables.');
+        throw new Error('Only SELECT queries are allowed.');
+    }
+
+    // 2. System Tables Check
+    const systemTables = ['_app_tables', 'users', 'projects', 'sqlite_master', 'sqlite_sequence'];
+    const hasSystemTable = systemTables.some(tbl => {
+        const pattern = new RegExp(`\\b${tbl}\\b|"${tbl}"`, 'i');
+        return pattern.test(sql);
+    });
+    if (hasSystemTable) throw new Error('Access to system tables is restricted.');
+
+    // 4. User Isolation Check (Optimized: Allowlist approach)
+    // Extract potential table names (pattern t_TIMESTAMP) from SQL
+    // This avoids checking every single other user's table (O(N_total) -> O(N_my_tables))
+    const tableNamePattern = /\b(t_\d+)\b/g;
+    const matches = sql.match(tableNamePattern) || [];
+    
+    if (matches.length > 0) {
+        // Get all tables owned by current user
+        const myTables = db.prepare('SELECT table_name FROM _app_tables WHERE user_id = ?').all(userId);
+        const myTableSet = new Set(myTables.map(t => t.table_name));
+        
+        const uniqueMatches = [...new Set(matches)]; // remove duplicates check
+        
+        for (const tbl of uniqueMatches) {
+            // Verify if the referenced table is in my allowed list
+            if (!myTableSet.has(tbl)) {
+                 // It's either someone else's table OR a non-existent table OR an unlucky alias collision
+                 // In all cases, we block it for security.
+                throw new Error(`Access to table '${tbl}' is denied or table does not exist.`);
+            }
+        }
+    }
+    
+    // Also protect against using 'users' or 'projects' via whatever casing if checking strictly
+    // (Already covered by systemTables regex with 'i' flag)
+};
+
+exports.executeQueryAndSave = (sql, newTableName, projectId = null, userId) => {
+    try {
+        validateReadOnlySelect(sql, userId);
+    } catch (e) {
+        throw new Error(e.message);
     }
 
     // Generate internal table name
@@ -544,31 +604,24 @@ exports.executeQueryAndSave = (sql, newTableName, projectId = null) => {
         
         // 3. Register in meta table
         db.prepare(`
-            INSERT INTO _app_tables (name, table_name, columns, project_id)
-            VALUES (?, ?, ?, ?)
-        `).run(newTableName, targetTableName, JSON.stringify(columns), projectId);
+            INSERT INTO _app_tables (name, table_name, columns, project_id, user_id)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(newTableName, targetTableName, JSON.stringify(columns), projectId, userId);
         
         return { success: true, tableName: targetTableName };
     })();
 };
 
-exports.previewQuery = (sql) => {
-    // Basic SQL validation
-    const forbidden = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE', 'REPLACE', 'CREATE', 'PRAGMA'];
-    const upperSql = sql.toUpperCase();
-    
-    // Check for forbidden keywords with word boundaries
-    const hasForbidden = forbidden.some(word => {
-        const regex = new RegExp(`\\b${word}\\b`);
-        return regex.test(upperSql);
-    });
-
-    if (hasForbidden) {
-        throw new Error('Only SELECT queries are allowed for preview.');
+exports.previewQuery = (sql, userId) => {
+    try {
+        validateReadOnlySelect(sql, userId);
+    } catch (e) {
+        throw new Error(e.message); // Re-throw
     }
 
     try {
         // Run query with limit for preview
+
         // We wrap it to limit rows returned to frontend to avoid crash
         // But if user typed LIMIT, we might override it. Let's just run it and take first 50 rows in JS or SQL wrapper.
         // Safer to wrap: SELECT * FROM (user_sql) LIMIT 50
@@ -586,10 +639,10 @@ exports.previewQuery = (sql) => {
     }
 };
 
-exports.addRow = (tableName, rowData = {}, position = null) => {
-    // Verify table exists
-    const tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ?').get(tableName);
-    if (!tableMeta) throw new Error(`Table ${tableName} not found`);
+exports.addRow = (tableName, rowData = {}, position = null, userId) => {
+    // Verify table exists AND belongs to user
+    const tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    if (!tableMeta) throw new Error(`Table ${tableName} not found or permission denied`);
 
     const columns = JSON.parse(tableMeta.columns);
     const validColumns = columns.map(c => c.name);
@@ -675,19 +728,19 @@ exports.addRow = (tableName, rowData = {}, position = null) => {
     return { id: info.lastInsertRowid };
 };
 
-exports.deleteRow = (tableName, rowId) => {
-    // Verify table exists
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
-    if (!tableExists) throw new Error(`Table ${tableName} not found`);
+exports.deleteRow = (tableName, rowId, userId) => {
+    // Verify table exists AND belongs to user
+    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    if (!tableExists) throw new Error(`Table ${tableName} not found or permission denied`);
 
     const info = db.prepare(`DELETE FROM "${tableName}" WHERE id = ?`).run(rowId);
     return { success: info.changes > 0 };
 };
 
-exports.addColumn = (tableName, columnName, columnType = 'TEXT') => {
-    // Verify table exists
-    const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ?').get(tableName);
-    if (!tableMeta) throw new Error(`Table ${tableName} not found`);
+exports.addColumn = (tableName, columnName, columnType = 'TEXT', userId) => {
+    // Verify table exists AND belongs to user
+    const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    if (!tableMeta) throw new Error(`Table ${tableName} not found or permission denied`);
 
     const sanitizedName = sanitizeColumnName(columnName);
     
@@ -709,9 +762,9 @@ exports.addColumn = (tableName, columnName, columnType = 'TEXT') => {
     })();
 };
 
-exports.deleteColumn = (tableName, columnName) => {
-    // Verify table exists
-    const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ?').get(tableName);
+exports.deleteColumn = (tableName, columnName, userId) => {
+    // Verify table exists AND belongs to user
+    const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
     if (!tableMeta) throw new Error(`Table ${tableName} not found`);
 
     const currentColumns = JSON.parse(tableMeta.columns);
