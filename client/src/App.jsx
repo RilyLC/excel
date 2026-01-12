@@ -412,16 +412,26 @@ function App() {
   };
 
   // Handle Search
-  const handleSearch = async (e) => {
+  const handleSearch = async (e, overrideQuery) => {
     e?.preventDefault();
-        if (!searchQuery.trim() && (advancedFilters?.items?.length || 0) === 0) {
+
+    // If a query is provided (e.g., clicking history), use it immediately to avoid stale state.
+    const query = typeof overrideQuery === 'string' ? overrideQuery : searchQuery;
+    const trimmedQuery = query.trim();
+
+    if (!trimmedQuery && (advancedFilters?.items?.length || 0) === 0) {
         setSearchResults(null);
         return;
     }
     
+    // Persist the text query to the input so the UI stays in sync.
+    if (query !== searchQuery) {
+        setSearchQuery(query);
+    }
+
     // Save to history if it's a text search
-    if (searchQuery.trim()) {
-        saveSearchToHistory(searchQuery.trim());
+    if (trimmedQuery) {
+        saveSearchToHistory(trimmedQuery);
     }
     setShowHistory(false); // Hide history dropdown
 
@@ -436,7 +446,7 @@ function App() {
             projectScope = scopes;
         }
 
-        const res = await api.search(searchQuery, advancedFilters, projectScope);
+        const res = await api.search(trimmedQuery, advancedFilters, projectScope);
         setSearchResults(res.data);
         setActiveTable(null); // Deselect table to show search results
     } catch (err) {
@@ -648,8 +658,7 @@ function App() {
                                                     type="button"
                                                     className="flex-1 text-left flex items-center gap-2"
                                                     onMouseDown={() => {
-                                                        setSearchQuery(term);
-                                                        handleSearch({ preventDefault: () => {} }); // Trigger search immediately
+                                                        handleSearch(null, term); // Trigger search immediately with the clicked term
                                                     }}
                                                 >
                                                     <Search size={14} className="text-gray-400" />
