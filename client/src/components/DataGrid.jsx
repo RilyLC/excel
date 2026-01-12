@@ -29,7 +29,7 @@ const EditableHeader = ({ initialValue, onUpdate }) => {
             <input
                 autoFocus
                 className="w-full bg-white border border-blue-500 rounded px-1 py-0.5 text-xs font-semibold text-gray-800"
-                value={value}
+                value={value ?? ''}
                 onChange={e => setValue(e.target.value)}
                 onBlur={handleFinish}
                 onKeyDown={e => e.key === 'Enter' && handleFinish()}
@@ -289,7 +289,7 @@ const PageJumpInput = ({ currentPage, totalPages, onPageChange }) => {
              <span>第</span>
              <input 
                 className="w-8 mx-1 text-center font-bold text-gray-800 bg-transparent border-b border-gray-300 hover:border-blue-400 focus:border-blue-500 focus:outline-none transition-colors appearance-none p-0"
-                value={val}
+                value={val ?? ''}
                 onChange={e => setVal(e.target.value)}
                 onBlur={handleCommit}
                 onKeyDown={e => e.key === 'Enter' && handleCommit()}
@@ -826,7 +826,7 @@ export default function DataGrid({
   }, [tableMeta, onCellUpdate, currentPage, selection]); // Added selection dependency for re-render
 
   const table = useReactTable({
-    data,
+    data: data || [],
     columns,
     state: {
         columnVisibility

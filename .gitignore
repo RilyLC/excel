@@ -5,5 +5,5 @@
 /release
 /server/node_modules
 /server/public
-/server/data/**
 /tmp-data/app.db
+server/data/app.db

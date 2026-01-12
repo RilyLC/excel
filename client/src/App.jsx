@@ -308,7 +308,7 @@ function App() {
     setIsLoading(true);
     try {
       const res = await api.getTableData(table.table_name, page, pageSize, currentFilters, currentSorts, currentGroups);
-      setTableData(res.data.data);
+      setTableData(res.data.data || []);
       setPagination({
         page: res.data.page,
         pageSize: pageSize,

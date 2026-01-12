@@ -245,7 +245,6 @@ exports.getAllTables = (projectId = null) => {
     }
 };
 
-exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts = [], groups = []) => {
 // --- Shared WHERE Builder ---
 function buildWhereCondition(filterItem, params) {
     // Case 1: Group (has 'items')
@@ -737,4 +736,3 @@ exports.deleteColumn = (tableName, columnName) => {
         return { success: true };
     })();
 };
-}

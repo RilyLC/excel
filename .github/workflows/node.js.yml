@@ -19,12 +19,8 @@ jobs:
           node-version: 20.x
           cache: npm
           cache-dependency-path: |
-            package-lock.json
             client/package-lock.json
             server/package-lock.json
-
-      - name: Install root deps
-        run: npm ci
 
       - name: Install client deps
         run: npm ci --prefix client
@@ -34,6 +30,9 @@ jobs:
 
       - name: Build client
         run: npm run build --prefix client
+
+      - name: Install server deps
+        run: npm ci --prefix server
 
       - name: Smoke load server DB module
         run: node -e "require('./server/db')"
