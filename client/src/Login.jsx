@@ -177,7 +177,7 @@ const Login = ({ onSuccess }) => {
                     </button>
                 </form>
 
-                <div className="mt-8 text-center">
+                {/* <div className="mt-8 text-center">
                     <p className="text-sm text-gray-500">
                         {isLogin ? '还没有账号？' : '已有账号？'}
                         <button 
@@ -187,7 +187,7 @@ const Login = ({ onSuccess }) => {
                             {isLogin ? '立即注册' : '直接登录'}
                         </button>
                     </p>
-                </div>
+                </div> */}
             </div>
         </div>
     );

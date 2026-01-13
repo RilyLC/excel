@@ -61,20 +61,45 @@ exports.createProject = (name, description, userId) => {
     return { id: info.lastInsertRowid, name, description, user_id: userId };
 };
 
-exports.getAllProjects = (userId) => {
+exports.getAllProjects = (userId, isAdmin = false) => {
+    if (isAdmin) {
+        return db.prepare(`
+            SELECT p.*, u.username as owner_name 
+            FROM projects p 
+            LEFT JOIN users u ON p.user_id = u.id 
+            ORDER BY p.created_at DESC
+        `).all();
+    }
     return db.prepare('SELECT * FROM projects WHERE user_id = ? ORDER BY created_at DESC').all(userId);
 };
 
-exports.deleteProject = (id, deleteTables = false, userId) => {
+exports.deleteProject = (id, deleteTables = false, userId, isAdmin = false) => {
     return db.transaction(() => {
-        // Verify ownership
-        const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(id, userId);
+        // Verify ownership OR Admin
+        let project;
+        if (isAdmin) {
+             project = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+        } else {
+             project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(id, userId);
+        }
+        
         if (!project) {
             // Check if it exists at all to give better error? Or just act idempotent.
             // For security, just say not found or success (idempotent).
             // Let's assume strict check.
             const exists = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
-            if (exists) throw new Error('项目不存在或没有权限');
+            if (exists && !isAdmin) throw new Error('项目不存在或没有权限');
+            if (exists) return; // Project exists but maybe something else wrong? no, if we are here and !project, and exists is true, access denied logic applied above?
+            // Wait, logic above:
+            // if isAdmin, project = get(id).
+            // if !isAdmin, project = get(id, user_id).
+            // if !project:
+            //    check exists(id).
+            //    if exists: throw 'No permission' (if not admin, but admin should have found it).
+            //    return (not found).
+            
+            const pExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+            if (pExists) throw new Error('项目不存在或没有权限');
             return; // Not found, ignore
         }
 
@@ -130,12 +155,18 @@ exports.updateProject = (id, name, description, userId) => {
     return { success: info.changes > 0 };
 };
 
-exports.updateTableMeta = (id, { name, projectId, columns }, userId) => {
+exports.updateTableMeta = (id, { name, projectId, columns }, userId, isAdmin = false) => {
     const updates = [];
     const params = [];
 
     // Verify ownership
-    const table = db.prepare('SELECT id FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+    let table;
+    if (isAdmin) {
+        table = db.prepare('SELECT id FROM _app_tables WHERE id = ?').get(id);
+    } else {
+        table = db.prepare('SELECT id FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+    }
+
     if (!table) throw new Error('表不存在或没有权限');
     
     if (name) {
@@ -297,10 +328,16 @@ exports.importExcel = async (buffer, originalFilename, projectId = null, userId)
   return createTableTransaction();
 };
 
-exports.getAllTables = (projectId = null, userId) => {
+exports.getAllTables = (projectId = null, userId, isAdmin = false) => {
     try {
-        let sql = 'SELECT * FROM _app_tables WHERE user_id = ? ';
-        const params = [userId];
+        let sql = 'SELECT t.*, u.username as owner_name FROM _app_tables t LEFT JOIN users u ON t.user_id = u.id WHERE 1=1 ';
+        const params = [];
+
+        // If NOT admin, restrict by user_id
+        if (!isAdmin) {
+            sql += ' AND t.user_id = ? ';
+            params.push(userId);
+        }
 
         // Multi-scope support: array of project IDs and/or 'uncategorized'
         if (Array.isArray(projectId)) {
@@ -313,9 +350,9 @@ exports.getAllTables = (projectId = null, userId) => {
                         .filter(v => !Number.isNaN(v));
 
                 const clauses = [];
-                if (includeUncategorized) clauses.push('project_id IS NULL');
+                if (includeUncategorized) clauses.push('t.project_id IS NULL');
                 if (numericIds.length > 0) {
-                        clauses.push(`project_id IN (${numericIds.map(() => '?').join(', ')})`);
+                        clauses.push(`t.project_id IN (${numericIds.map(() => '?').join(', ')})`);
                         params.push(...numericIds);
                 }
 
@@ -324,13 +361,13 @@ exports.getAllTables = (projectId = null, userId) => {
                 }
                 // If clauses invalid, maybe return empty? But here we are already filtering by user_id so it's safe to show "nothing inside this project selection"
         } else if (projectId === 'uncategorized' || projectId === -1) {
-                sql += 'AND project_id IS NULL ';
+                sql += 'AND t.project_id IS NULL ';
         } else if (projectId) {
-                sql += 'AND project_id = ? ';
+                sql += 'AND t.project_id = ? ';
                 params.push(projectId);
         }
 
-        sql += 'ORDER BY created_at DESC';
+        sql += 'ORDER BY t.created_at DESC';
     
         const tables = db.prepare(sql).all(...params);
         return tables.map(t => ({
@@ -421,11 +458,16 @@ function buildWhereClause(filters, params) {
     return whereClause;
 }
 
-exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts = [], groups = [], userId) => {
+exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts = [], groups = [], userId, isAdmin = false) => {
     // Verify tableName exists in _app_tables AND belongs to user
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-    if (!tableExists) {
-        throw new Error(`表 ${tableName} 未找到或没有权限`);
+    if (!isAdmin) {
+        const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+        if (!tableExists) {
+            throw new Error(`表 ${tableName} 未找到或没有权限`);
+        }
+    } else {
+         const exists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
+         if (!exists) throw new Error(`表 ${tableName} 未找到`);
     }
 
     // Check if _sort_order exists
@@ -498,10 +540,12 @@ exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts 
         totalPages: Math.ceil(count / pageSize)
     };
 };
-
-exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId) => {
+exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId, isAdmin = false) => {
     // Verify tableName exists
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    const tableExists = isAdmin
+        ? db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName)
+        : db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    
     if (!tableExists) {
         throw new Error(`表 ${tableName} 未找到或没有权限`);
     }
@@ -532,8 +576,8 @@ exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId) 
     const sql = `SELECT ${selectParts.join(', ')} FROM "${tableName}" ${whereClause}`;
     
     try {
-        const result = db.prepare(sql).get(...params);
-        return result;
+        const row = db.prepare(sql).get(...params);
+        return row || {};
     } catch (e) {
         console.error('Aggregate error:', e);
         // If error (e.g. type mismatch in SUM), return nulls or empty
@@ -541,9 +585,12 @@ exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId) 
     }
 };
 
-exports.deleteTable = (id, userId) => {
+exports.deleteTable = (id, userId, isAdmin = false) => {
     // Verify ownership
-    const table = db.prepare('SELECT table_name, type, file_path FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+    const table = isAdmin
+        ? db.prepare('SELECT table_name, type, file_path FROM _app_tables WHERE id = ?').get(id)
+        : db.prepare('SELECT table_name, type, file_path FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+
     if (!table) throw new Error('表未找到或没有权限');
 
     const dropTransaction = db.transaction(() => {
@@ -564,9 +611,15 @@ exports.deleteTable = (id, userId) => {
     return dropTransaction();
 };
 
-exports.updateCellValue = (tableName, rowId, column, value, userId) => {
+exports.updateCellValue = (tableName, rowId, column, value, userId, isAdmin = false) => {
     // Verify table exists AND belongs to user
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    let tableExists;
+    if (isAdmin) {
+        tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
+    } else {
+        tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    }
+
     if (!tableExists) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     // Update
@@ -576,9 +629,15 @@ exports.updateCellValue = (tableName, rowId, column, value, userId) => {
     return { success: info.changes > 0 };
 };
 
-exports.exportTable = (tableName, userId) => {
+exports.exportTable = (tableName, userId, isAdmin = false) => {
     // Verify table exists and get display name
-    const tableMeta = db.prepare('SELECT name, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    let tableMeta;
+    if (isAdmin) {
+        tableMeta = db.prepare('SELECT name, columns FROM _app_tables WHERE table_name = ?').get(tableName);
+    } else {
+        tableMeta = db.prepare('SELECT name, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    }
+
     if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     // Get Data
@@ -612,7 +671,7 @@ exports.exportTable = (tableName, userId) => {
     };
 };
 
-const validateReadOnlySelect = (sql, userId) => {
+const validateReadOnlySelect = (sql, userId, isAdmin = false) => {
     // 1. Basic Keyword Check
     const forbidden = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE', 'REPLACE', 'CREATE', 'PRAGMA', 'VACUUM', 'ATTACH', 'DETACH', 'GRANT', 'REVOKE', 'COMMIT', 'ROLLBACK'];
     const upperSql = sql.toUpperCase();
@@ -635,6 +694,9 @@ const validateReadOnlySelect = (sql, userId) => {
     if (hasSystemTable) throw new Error('禁止访问系统表。');
 
     // 4. User Isolation Check (Optimized: Allowlist approach)
+    // If Admin, skip isolation check (can query any user table)
+    if (isAdmin) return;
+
     // Extract potential table names (pattern t_<uuid> or doc_<uuid> or hex) from SQL, supporting quoted identifiers
     // This avoids checking every single other user's table (O(N_total) -> O(N_my_tables))
     const tableNamePattern = /(?:"((?:t|doc)_[0-9a-fA-F-]{6,})"|\b((?:t|doc)_[0-9a-fA-F-]{6,})\b)/g;
@@ -667,9 +729,9 @@ const validateReadOnlySelect = (sql, userId) => {
 
 exports._validateReadOnlySelect = validateReadOnlySelect;
 
-exports.executeQueryAndSave = (sql, newTableName, projectId = null, userId) => {
+exports.executeQueryAndSave = (sql, newTableName, projectId = null, userId, isAdmin = false) => {
     try {
-        validateReadOnlySelect(sql, userId);
+        validateReadOnlySelect(sql, userId, isAdmin);
     } catch (e) {
         throw new Error(e.message);
     }
@@ -703,9 +765,9 @@ exports.executeQueryAndSave = (sql, newTableName, projectId = null, userId) => {
     })();
 };
 
-exports.previewQuery = (sql, userId) => {
+exports.previewQuery = (sql, userId, isAdmin = false) => {
     try {
-        validateReadOnlySelect(sql, userId);
+        validateReadOnlySelect(sql, userId, isAdmin);
     } catch (e) {
         throw new Error(e.message); // Re-throw
     }
@@ -730,9 +792,15 @@ exports.previewQuery = (sql, userId) => {
     }
 };
 
-exports.addRow = (tableName, rowData = {}, position = null, userId) => {
+exports.addRow = (tableName, rowData = {}, position = null, userId, isAdmin = false) => {
     // Verify table exists AND belongs to user
-    const tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    let tableMeta;
+    if (isAdmin) {
+        tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ?').get(tableName);
+    } else {
+        tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    }
+
     if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const columns = JSON.parse(tableMeta.columns);
@@ -804,8 +872,7 @@ exports.addRow = (tableName, rowData = {}, position = null, userId) => {
         // Insert empty row (default values)
         const stmt = db.prepare(`INSERT INTO "${tableName}" DEFAULT VALUES`);
         const info = stmt.run();
-        // Update order if needed after insert? No, DEFAULT VALUES can't set specific col.
-        // We need to UPDATE immediately if we have order.
+        
         if (newOrder !== null) {
             db.prepare(`UPDATE "${tableName}" SET "_sort_order" = ? WHERE id = ?`).run(newOrder, info.lastInsertRowid);
         }
@@ -819,18 +886,27 @@ exports.addRow = (tableName, rowData = {}, position = null, userId) => {
     return { id: info.lastInsertRowid };
 };
 
-exports.deleteRow = (tableName, rowId, userId) => {
+exports.deleteRow = (tableName, rowId, userId, isAdmin = false) => {
     // Verify table exists AND belongs to user
-    const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    const tableExists = isAdmin
+        ? db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName)
+        : db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+        
     if (!tableExists) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const info = db.prepare(`DELETE FROM "${tableName}" WHERE id = ?`).run(rowId);
     return { success: info.changes > 0 };
 };
 
-exports.addColumn = (tableName, columnName, columnType = 'TEXT', userId) => {
+exports.addColumn = (tableName, columnName, columnType = 'TEXT', userId, isAdmin = false) => {
     // Verify table exists AND belongs to user
-    const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    let tableMeta;
+    if (isAdmin) {
+        tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ?').get(tableName);
+    } else {
+        tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    }
+
     if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const sanitizedName = sanitizeColumnName(columnName);
@@ -842,7 +918,6 @@ exports.addColumn = (tableName, columnName, columnType = 'TEXT', userId) => {
     }
 
     return db.transaction(() => {
-        // 1. Alter Table
         db.exec(`ALTER TABLE "${tableName}" ADD COLUMN "${sanitizedName}" ${columnType}`);
         
         // 2. Update Meta
@@ -853,23 +928,25 @@ exports.addColumn = (tableName, columnName, columnType = 'TEXT', userId) => {
     })();
 };
 
-exports.deleteColumn = (tableName, columnName, userId) => {
+exports.deleteColumn = (tableName, columnName, userId, isAdmin = false) => {
     // Verify table exists AND belongs to user
-    const tableMeta = db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    const tableMeta = isAdmin 
+        ? db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ?').get(tableName)
+        : db.prepare('SELECT id, columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+
     if (!tableMeta) throw new Error(`表 ${tableName} 未找到或没有权限`);
 
     const currentColumns = JSON.parse(tableMeta.columns);
     const colIndex = currentColumns.findIndex(c => c.name === columnName);
     
     if (colIndex === -1) throw new Error(`列 ${columnName} 未找到`);
-
+    
     return db.transaction(() => {
         // 1. Alter Table (Try DROP COLUMN)
         try {
             db.exec(`ALTER TABLE "${tableName}" DROP COLUMN "${columnName}"`);
         } catch (e) {
-            // Fallback for older SQLite if needed (Create new table, copy data, rename)
-            // But we assume newer SQLite here.
+            // Fallback for older SQLite if needed
             throw new Error(`删除列失败: ${e.message}`);
         }
         
@@ -880,8 +957,11 @@ exports.deleteColumn = (tableName, columnName, userId) => {
         return { success: true };
     })();
 };
-exports.getDocumentContent = (id, userId) => {
-    const table = db.prepare('SELECT file_path, name, type FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+exports.getDocumentContent = (id, userId, isAdmin = false) => {
+    const table = isAdmin
+        ? db.prepare('SELECT file_path, name, type FROM _app_tables WHERE id = ?').get(id)
+        : db.prepare('SELECT file_path, name, type FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+
     if (!table) throw new Error('Document not found or access denied');
     
     if (table.type !== 'document' || !table.file_path) {

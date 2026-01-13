@@ -216,6 +216,17 @@ const GlobalFilterGroup = ({ group, columns, onUpdate, onRemove, depth = 0 }) =>
 };
 
 function App({ onLogout }) {
+  const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+      try {
+          const u = JSON.parse(localStorage.getItem('user') || '{}');
+          setCurrentUser(u);
+      } catch(e) {}
+  }, []);
+
+  const canDelete = currentUser?.role === 'admin' || currentUser?.permissions?.can_delete === true;
+
   const [tables, setTables] = useState([]);
   const [activeTable, setActiveTable] = useState(null);
   
@@ -526,11 +537,16 @@ function App({ onLogout }) {
         await api.updateTable(manageTable.id, updateData);
         
         // Update local state if successful
-        const updatedTable = { ...manageTable, ...updateData };
+        // Note: Backend expects camelCase 'projectId', but database/frontend reads 'project_id'
+        const localUpdate = {
+            name: manageTableName,
+            project_id: newProjectForTable === 'null' ? null : Number(newProjectForTable) 
+        };
+
         if (activeTable?.id === manageTable.id) {
-            setActiveTable(prev => ({ ...prev, ...updateData }));
+            setActiveTable(prev => ({ ...prev, ...localUpdate }));
         }
-        setTables(prev => prev.map(t => t.id === manageTable.id ? { ...t, ...updateData } : t));
+        setTables(prev => prev.map(t => t.id === manageTable.id ? { ...t, ...localUpdate } : t));
 
         setManageTable(null);
         // loadData(); // Optional, but local update is faster
@@ -810,13 +826,13 @@ function App({ onLogout }) {
         activeProject={activeProject}
         onSelectProject={handleSelectProject}
         onCreateProject={handleCreateProject}
-        onDeleteProject={handleDeleteProject}
+        onDeleteProject={canDelete ? handleDeleteProject : undefined} // Modified
         onEditProject={handleEditProject}
         tables={tables} 
         activeTable={activeTable} 
         onSelectTable={handleSelectTable}
         onUploadClick={() => setIsUploadOpen(true)}
-        onDeleteTable={handleDeleteTable}
+        onDeleteTable={canDelete ? handleDeleteTable : undefined} // Modified
         onManageTable={(table) => {
             setManageTable(table);
             setManageTableName(table.name);
@@ -915,8 +931,11 @@ function App({ onLogout }) {
                     <span className="text-sm font-semibold text-gray-700">
                         {JSON.parse(localStorage.getItem('user') || '{}').username || 'User'}
                     </span>
-                    <span className="text-xs text-gray-500">用户</span>
+                    <span className="text-xs text-gray-500">
+                        {(JSON.parse(localStorage.getItem('user') || '{}').role === 'admin') ? '管理员' : '用户'}
+                    </span>
                 </div>
+                {currentUser?.role === 'admin' && (
                 <button
                     onClick={() => setIsChangePasswordOpen(true)}
                     className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
@@ -924,6 +943,7 @@ function App({ onLogout }) {
                 >
                     <KeyRound size={18} />
                 </button>
+                )}
                 <button 
                     onClick={onLogout}
                     className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
@@ -1339,6 +1359,7 @@ function App({ onLogout }) {
                      />
                 ) : (
                 <DataGrid 
+                    currentUser={currentUser} // Pass permissions
                     tableMeta={activeTable}
                     data={tableData}
                     
@@ -1417,20 +1438,22 @@ function App({ onLogout }) {
             title={manageTable.type === 'document' ? "管理文档" : "管理表格"}
             footer={
                 <div className="flex justify-between w-full">
-                    <button 
-                        onClick={() => {
-                            if (window.confirm(`确定要删除这个${manageTable.type === 'document' ? '文档' : '表格'}吗？`)) {
-                                api.deleteTable(manageTable.id).then(() => {
-                                    if (activeTable?.id === manageTable.id) setActiveTable(null);
-                                    setManageTable(null);
-                                    loadData();
-                                }).catch(() => showAlert('删除失败'));
-                            }
-                        }}
-                        className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
-                    >
-                        {manageTable.type === 'document' ? "删除文档" : "删除表格"}
-                    </button>
+                    {canDelete && (
+                        <button 
+                            onClick={() => {
+                                if (window.confirm(`确定要删除这个${manageTable.type === 'document' ? '文档' : '表格'}吗？`)) {
+                                    api.deleteTable(manageTable.id).then(() => {
+                                        if (activeTable?.id === manageTable.id) setActiveTable(null);
+                                        setManageTable(null);
+                                        loadData();
+                                    }).catch(() => showAlert('删除失败'));
+                                }
+                            }}
+                            className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+                        >
+                            {manageTable.type === 'document' ? "删除文档" : "删除表格"}
+                        </button>
+                    )}
                     <div className="flex gap-2">
                         <button 
                             onClick={() => setManageTable(null)}
@@ -1459,6 +1482,17 @@ function App({ onLogout }) {
                         placeholder={`请输入${manageTable.type === 'document' ? "文档" : "表格"}名称`}
                     />
                 </div>
+                {manageTable.owner_name && (
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">所属用户</label>
+                    <input 
+                        type="text"
+                        disabled
+                        className="w-full border-gray-300 rounded-md shadow-sm bg-gray-100 text-gray-500 cursor-not-allowed"
+                        value={manageTable.owner_name}
+                    />
+                </div>
+                )}
                 <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">所属项目</label>
                     <select 
@@ -1467,7 +1501,7 @@ function App({ onLogout }) {
                         onChange={e => setNewProjectForTable(e.target.value)}
                     >
                         <option value="null">未分类</option>
-                        {projects.map(p => (
+                        {projects.filter(p => !manageTable.user_id || p.user_id === manageTable.user_id).map(p => (
                             <option key={p.id} value={p.id}>{p.name}</option>
                         ))}
                     </select>

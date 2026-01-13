@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useContext, createContext } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -7,9 +7,11 @@ import {
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, Plus, Trash2, Download, Settings, ArrowUp, ArrowDown, ArrowUpDown, GripVertical, Eye, EyeOff, Layers, Calculator, Copy, Eraser, Columns, Rows } from 'lucide-react';
 import { api } from '../api';
 
+const SelectionContext = createContext(null);
+
 /* --- Helper Components --- */
 
-const EditableHeader = ({ initialValue, onUpdate }) => {
+const EditableHeader = ({ initialValue, onUpdate, canEdit }) => {
     const [value, setValue] = useState(initialValue);
     const [isEditing, setIsEditing] = useState(false);
 
@@ -44,7 +46,7 @@ const EditableHeader = ({ initialValue, onUpdate }) => {
             title={initialValue}
             onDoubleClick={(e) => {
                 e.stopPropagation();
-                setIsEditing(true);
+                if (canEdit) setIsEditing(true);
             }}
         >
             {initialValue}
@@ -52,9 +54,19 @@ const EditableHeader = ({ initialValue, onUpdate }) => {
     );
 };
 
-const EditableCell = ({ value: initialValue, rowId, columnId, rowIndex, colIndex, onUpdate, isSelected, onSelectionStart, onSelectionMove, onSelectionEnd, onContextMenu }) => {
+const EditableCell = ({ value: initialValue, rowId, columnId, rowIndex, colIndex, onUpdate }) => {
+    const { selection, onSelectionStart, onSelectionMove, onSelectionEnd, onContextMenu, canEdit } = useContext(SelectionContext);
     const [value, setValue] = useState(initialValue);
     const [isEditing, setIsEditing] = useState(false);
+
+    const isSelected = useMemo(() => {
+        if (!selection || !selection.start || !selection.end) return false;
+        const minRow = Math.min(selection.start.row, selection.end.row);
+        const maxRow = Math.max(selection.start.row, selection.end.row);
+        const minCol = Math.min(selection.start.col, selection.end.col);
+        const maxCol = Math.max(selection.start.col, selection.end.col);
+        return rowIndex >= minRow && rowIndex <= maxRow && colIndex >= minCol && colIndex <= maxCol;
+    }, [selection, rowIndex, colIndex]);
 
     useEffect(() => {
         setValue(initialValue);
@@ -89,12 +101,16 @@ const EditableCell = ({ value: initialValue, rowId, columnId, rowIndex, colIndex
 
     return (
         <div 
-            className={`w-full h-full min-h-[20px] px-1 flex items-center select-none ${isSelected ? 'bg-blue-100' : ''}`}
+            className={`absolute inset-0 flex items-center px-1 select-none ${isSelected ? 'bg-blue-100' : ''}`}
             title={value}
-            onDoubleClick={() => setIsEditing(true)}
+            onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (canEdit) setIsEditing(true);
+            }}
             onMouseDown={(e) => {
                 // Left click only
                 if (e.button === 0) {
+                     // Only select if not editing (though input is separate return)
                      onSelectionStart(rowIndex, colIndex);
                 }
             }}
@@ -342,6 +358,7 @@ const AggregateCell = ({ value, func, onChange }) => {
 };
 
 export default function DataGrid({ 
+    currentUser,
     tableMeta, 
     data, 
     totalPages, 
@@ -780,6 +797,8 @@ export default function DataGrid({
       onTableUpdate({ ...tableMeta, columns: newColumns });
   };
   
+  const canEdit = currentUser?.role === 'admin' || !!currentUser?.permissions?.can_edit;
+
   // Dynamic columns
   const columns = useMemo(() => {
     if (!tableMeta || !tableMeta.columns) return [];
@@ -812,18 +831,13 @@ export default function DataGrid({
             onUpdate={onCellUpdate} 
             rowIndex={info.row.index}
             colIndex={tableMeta.columns.findIndex(c => c.name === col.name) + 1} // Offset by index col
-            isSelected={isCellSelected(info.row.index, tableMeta.columns.findIndex(c => c.name === col.name) + 1)}
-            onSelectionStart={handleSelectionStart}
-            onSelectionMove={handleSelectionMove}
-            onSelectionEnd={handleSelectionEnd}
-            onContextMenu={handleContextMenu}
         />
       ),
     }));
 
     return [indexCol, ...dataCols];
 
-  }, [tableMeta, onCellUpdate, currentPage, selection]); // Added selection dependency for re-render
+  }, [tableMeta, onCellUpdate, currentPage]);
 
   const table = useReactTable({
     data: data || [],
@@ -849,7 +863,10 @@ export default function DataGrid({
   const hiddenCount = Object.values(columnVisibility).filter(v => v === false).length;
   const hasViewChanges = filterCount > 0 || sorts.length > 0 || groups.length > 0 || hiddenCount > 0;
 
+  const canDeleteRows = canEdit && selection.start && selection.end;
+
   return (
+    <SelectionContext.Provider value={{ selection, onSelectionStart: handleSelectionStart, onSelectionMove: handleSelectionMove, onSelectionEnd: handleSelectionEnd, onContextMenu: handleContextMenu, canEdit }}>
     <div className="flex flex-col h-full bg-white shadow-sm rounded-lg overflow-hidden border border-gray-200">
       {/* Toolbar */}
       <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-white gap-4">
@@ -1164,6 +1181,7 @@ export default function DataGrid({
                                 <EditableHeader 
                                     initialValue={header.column.columnDef.header}
                                     onUpdate={(newVal) => handleColumnNameUpdate(columnName, newVal)}
+                                    canEdit={canEdit}
                                 />
                             ) : (
                                 <span>#</span>
@@ -1440,58 +1458,68 @@ export default function DataGrid({
             </button>
             <button 
                 onClick={handleClearSelection}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+                disabled={!canEdit}
+                className={`w-full text-left px-4 py-2 flex items-center gap-2 ${!canEdit ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-700'}`}
             >
-                <Eraser size={14} className="text-gray-400" /> 清空数据
+                <Eraser size={14} className={!canEdit ? 'text-gray-300' : 'text-gray-400'} /> 清空数据
             </button>
 
             <div className="h-px bg-gray-100 my-1"></div>
 
             <button 
                 onClick={() => handleAddRow('before')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+                disabled={!canEdit}
+                className={`w-full text-left px-4 py-2 flex items-center gap-2 ${!canEdit ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-700'}`}
             >
-                <ArrowUp size={14} className="text-gray-400" /> 在上方插入行
+                <ArrowUp size={14} className={!canEdit ? 'text-gray-300' : 'text-gray-400'} /> 在上方插入行
             </button>
             <button 
                 onClick={() => handleAddRow('after')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+                disabled={!canEdit}
+                className={`w-full text-left px-4 py-2 flex items-center gap-2 ${!canEdit ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-700'}`}
             >
-                <ArrowDown size={14} className="text-gray-400" /> 在下方插入行
+                <ArrowDown size={14} className={!canEdit ? 'text-gray-300' : 'text-gray-400'} /> 在下方插入行
             </button>
-            <button 
-                onClick={handleDeleteSelectedRows}
-                className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2"
-            >
-                <Rows size={14} /> 删除选中行
-            </button>
+            {canDeleteRows && (
+                <button 
+                    onClick={handleDeleteSelectedRows}
+                    className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2"
+                >
+                    <Rows size={14} /> 删除选中行
+                </button>
+            )}
             
             {contextMenu.colId && (
                 <>
                     <div className="h-px bg-gray-100 my-1"></div>
                     <button 
                         onClick={() => handleAddColumn('left')}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+                        disabled={!canEdit}
+                        className={`w-full text-left px-4 py-2 flex items-center gap-2 ${!canEdit ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-700'}`}
                     >
-                        <ChevronsLeft size={14} className="text-gray-400" /> 左侧插入列
+                        <ChevronsLeft size={14} className={!canEdit ? 'text-gray-300' : 'text-gray-400'} /> 左侧插入列
                     </button>
                     <button 
                         onClick={() => handleAddColumn('right')}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+                        disabled={!canEdit}
+                        className={`w-full text-left px-4 py-2 flex items-center gap-2 ${!canEdit ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-700'}`}
                     >
-                        <ChevronsRight size={14} className="text-gray-400" /> 右侧插入列
+                        <ChevronsRight size={14} className={!canEdit ? 'text-gray-300' : 'text-gray-400'} /> 右侧插入列
                     </button>
-                    <button 
-                        onClick={handleDeleteSelectedColumns}
-                        className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2"
-                    >
-                        <Columns size={14} /> 删除选中列
-                    </button>
+                    {canEdit && (
+                        <button 
+                            onClick={handleDeleteSelectedColumns}
+                            className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2"
+                        >
+                            <Columns size={14} /> 删除选中列
+                        </button>
+                    )}
                 </>
             )}
         </div>
       )}
     </div>
+    </SelectionContext.Provider>
   );
 }
 

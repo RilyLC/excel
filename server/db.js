@@ -21,26 +21,28 @@ db.exec(`
     table_name TEXT NOT NULL UNIQUE,
     columns TEXT NOT NULL, -- JSON string of column definitions
     project_id INTEGER,
-    user_id INTEGER,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, 
+    type TEXT DEFAULT "table", 
+    file_path TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL
   );
 
   CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT,
-    user_id INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP, 
+    role TEXT DEFAULT 'user',
+    permissions TEXT DEFAULT NULL
   );
 
   CREATE TABLE IF NOT EXISTS _document_index (
@@ -51,8 +53,5 @@ db.exec(`
   );
 `);
 
-
-
-module.exports = db;
 
 module.exports = db;

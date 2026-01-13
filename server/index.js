@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const tableService = require('./services/tableService');
 const authService = require('./services/authService');
-const { authenticateToken } = require('./middleware/authMiddleware');
+const { authenticateToken, requirePermission } = require('./middleware/authMiddleware');
 const db = require('./db');
 
 const app = express();
@@ -20,16 +20,16 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Routes
 
 // --- Auth Routes (Public) ---
-app.post('/api/auth/register', (req, res) => {
-    try {
-        const { username, password } = req.body;
-        if (!username || !password) return res.status(400).json({ error: '用户名和密码是必填项' });
-        const user = authService.register(username, password);
-        res.json(user);
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
+// app.post('/api/auth/register', (req, res) => {
+//     try {
+//         const { username, password } = req.body;
+//         if (!username || !password) return res.status(400).json({ error: '用户名和密码是必填项' });
+//         const user = authService.register(username, password);
+//         res.json(user);
+//     } catch (err) {
+//         res.status(400).json({ error: err.message });
+//     }
+// });
 
 app.post('/api/auth/login', (req, res) => {
     try {
@@ -63,7 +63,8 @@ app.post('/api/auth/change-password', (req, res) => {
 // Projects API
 app.get('/api/projects', (req, res) => {
     try {
-        const projects = tableService.getAllProjects(req.user.id);
+        const isAdmin = req.user.role === 'admin' || req.user.permissions?.view_all;
+        const projects = tableService.getAllProjects(req.user.id, isAdmin);
         res.json(projects);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -90,11 +91,11 @@ app.put('/api/projects/:id', (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
-app.delete('/api/projects/:id', (req, res) => {
+app.delete('/api/projects/:id', requirePermission('can_delete'), (req, res) => {
     try {
         const deleteTables = req.query.deleteTables === 'true';
-        tableService.deleteProject(req.params.id, deleteTables, req.user.id);
+        const isAdmin = req.user.role === 'admin' || req.user.permissions?.can_delete; 
+        tableService.deleteProject(req.params.id, deleteTables, req.user.id, isAdmin);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -106,7 +107,8 @@ app.get('/api/tables', (req, res) => {
   try {
     // If projectId is 'uncategorized' string, pass it directly
     const projectId = req.query.projectId === 'uncategorized' ? 'uncategorized' : (req.query.projectId ? parseInt(req.query.projectId) : null);
-    const tables = tableService.getAllTables(projectId, req.user.id);
+    const isAdmin = req.user.role === 'admin' || req.user.permissions?.view_all;
+    const tables = tableService.getAllTables(projectId, req.user.id, isAdmin);
     res.json(tables);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -114,10 +116,11 @@ app.get('/api/tables', (req, res) => {
 });
 
 // Update Table Meta (Project/Name)
-app.put('/api/tables/:id', (req, res) => {
+app.put('/api/tables/:id', requirePermission('can_edit'), (req, res) => {
     try {
         const { id } = req.params;
-        const result = tableService.updateTableMeta(id, req.body, req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        const result = tableService.updateTableMeta(id, req.body, req.user.id, isAdmin);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -164,7 +167,8 @@ app.get('/api/tables/:tableName/data', (req, res) => {
         try { groups = JSON.parse(req.query.groups); } catch (e) { console.error('分组异常', e); }
     }
 
-    const result = tableService.getTableData(tableName, page, pageSize, filters, sorts, groups, req.user.id);
+    const isAdmin = req.user.role === 'admin' || req.user.permissions?.view_all;
+    const result = tableService.getTableData(tableName, page, pageSize, filters, sorts, groups, req.user.id, isAdmin);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -175,7 +179,8 @@ app.get('/api/tables/:tableName/data', (req, res) => {
 app.get('/api/documents/:id/content', (req, res) => {
     try {
         const { id } = req.params;
-        const { filePath, originalName } = tableService.getDocumentContent(id, req.user.id);
+        const isAdmin = req.user.role === 'admin' || req.user.permissions?.view_all;
+        const { filePath, originalName } = tableService.getDocumentContent(id, req.user.id, isAdmin);
         res.download(filePath, originalName);
     } catch (err) {
         if (err.message.includes('not found') || err.message.includes('not a document')) {
@@ -199,7 +204,8 @@ app.get('/api/tables/:tableName/aggregates', (req, res) => {
             try { aggregates = JSON.parse(req.query.aggregates); } catch (e) { console.error('聚合异常', e); }
         }
 
-        const result = tableService.getTableAggregates(tableName, filters, aggregates, req.user.id);
+        const isAdmin = req.user.role === 'admin' || req.user.permissions?.view_all;
+        const result = tableService.getTableAggregates(tableName, filters, aggregates, req.user.id, isAdmin);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -238,9 +244,10 @@ app.get('/api/tables/:tableName/rows/:id/locate', (req, res) => {
 });
 
 // 4. Delete Table
-app.delete('/api/tables/:id', (req, res) => {
+app.delete('/api/tables/:id', requirePermission('can_delete'), (req, res) => {
   try {
-    tableService.deleteTable(req.params.id, req.user.id);
+    const isAdmin = req.user.role === 'admin' || req.user.permissions?.can_delete;
+    tableService.deleteTable(req.params.id, req.user.id, isAdmin);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -248,12 +255,13 @@ app.delete('/api/tables/:id', (req, res) => {
 });
 
 // 6. Update Cell Data
-app.put('/api/tables/:tableName/rows/:id', (req, res) => {
+app.put('/api/tables/:tableName/rows/:id', requirePermission('can_edit'), (req, res) => {
     try {
         const { tableName, id } = req.params;
         const { column, value } = req.body; 
         
-        tableService.updateCellValue(tableName, id, column, value, req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        tableService.updateCellValue(tableName, id, column, value, req.user.id, isAdmin);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -264,7 +272,8 @@ app.put('/api/tables/:tableName/rows/:id', (req, res) => {
 app.get('/api/tables/:tableName/export', (req, res) => {
     try {
         const { tableName } = req.params;
-        const result = tableService.exportTable(tableName, req.user.id);
+        const isAdmin = req.user.role === 'admin' || req.user.permissions?.view_all;
+        const result = tableService.exportTable(tableName, req.user.id, isAdmin);
         
         // Encode filename for header
         const filename = encodeURIComponent(result.filename);
@@ -291,7 +300,8 @@ app.get('/api/search', async (req, res) => {
         if (!query && !hasAnyFilter) return res.json([]);
 
         // Get all tables to search through (scoped to user)
-        let tables = tableService.getAllTables(null, req.user.id);
+        const isAdmin = req.user.role === 'admin' || req.user.permissions?.view_all;
+        let tables = tableService.getAllTables(null, req.user.id, isAdmin);
         
         // Filter by project scope if requested
         if (projectIdsRaw) {
@@ -303,7 +313,7 @@ app.get('/api/search', async (req, res) => {
                 scopes = String(projectIdsRaw).split(',').map(s => s.trim()).filter(Boolean);
             }
             if (Array.isArray(scopes) && scopes.length > 0) {
-                tables = tableService.getAllTables(scopes, req.user.id);
+                tables = tableService.getAllTables(scopes, req.user.id, isAdmin);
             } else {
                 // Explicitly scoped to nothing => no results
                 return res.json([]);
@@ -311,7 +321,7 @@ app.get('/api/search', async (req, res) => {
         } else if (projectId) {
             const scopeId = projectId === 'uncategorized' ? 'uncategorized' : parseInt(projectId);
             if (!isNaN(scopeId) || scopeId === 'uncategorized') {
-                tables = tableService.getAllTables(scopeId, req.user.id);
+                tables = tableService.getAllTables(scopeId, req.user.id, isAdmin);
             }
         }
 
@@ -535,7 +545,8 @@ app.post('/api/query/save', (req, res) => {
         const { sql, tableName, projectId } = req.body;
         if (!sql || !tableName) return res.status(400).json({ error: 'SQL和表名是必填项' });
         
-        const result = tableService.executeQueryAndSave(sql, tableName, projectId, req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        const result = tableService.executeQueryAndSave(sql, tableName, projectId, req.user.id, isAdmin);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -548,7 +559,13 @@ app.post('/api/query/preview', (req, res) => {
         const { sql } = req.body;
         if (!sql) return res.status(400).json({ error: 'SQL是必填项' });
         
-        const result = tableService.previewQuery(sql, req.user.id);
+        const isAdmin = req.user.role === 'admin' || req.user.permissions?.can_edit; // Preview implies read, but advanced functionality usually. Let's assume view_all is enough? No, this is raw sql. Let's say can_edit or admin. Or strict view_all.
+        // Actually, previewQuery is read-only. view_all should be enough.
+        // But `isAdmin` param in service bypasses explicit owner check.
+        // If I am just a user with view_all (is that possible?), I should be able to preview?
+        // Let's stick effectively to Admin for now as the prompt complained about Admin.
+        const canPreview = req.user.role === 'admin' || req.user.permissions?.view_all;
+        const result = tableService.previewQuery(sql, req.user.id, canPreview);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -556,7 +573,7 @@ app.post('/api/query/preview', (req, res) => {
 });
 
 // 11. Add Row
-app.post('/api/tables/:tableName/rows', (req, res) => {
+app.post('/api/tables/:tableName/rows', requirePermission('can_edit'), (req, res) => {
     try {
         const { tableName } = req.params;
         // Support both direct row object (legacy) and { data, position } wrapper
@@ -567,19 +584,21 @@ app.post('/api/tables/:tableName/rows', (req, res) => {
             rowData = req.body.data;
             position = req.body.position;
         }
-
-        const result = tableService.addRow(tableName, rowData, position, req.user.id);
+        
+        const isAdmin = req.user.role === 'admin';
+        const result = tableService.addRow(tableName, rowData, position, req.user.id, isAdmin);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
-
 // 12. Delete Row
-app.delete('/api/tables/:tableName/rows/:id', (req, res) => {
+// Row deletion is considered an 'edit' operation, not a 'resource delete' operation.
+app.delete('/api/tables/:tableName/rows/:id', requirePermission('can_edit'), (req, res) => {
     try {
         const { tableName, id } = req.params;
-        const result = tableService.deleteRow(tableName, id, req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        const result = tableService.deleteRow(tableName, id, req.user.id, isAdmin);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -587,13 +606,14 @@ app.delete('/api/tables/:tableName/rows/:id', (req, res) => {
 });
 
 // 13. Add Column
-app.post('/api/tables/:tableName/columns', (req, res) => {
+app.post('/api/tables/:tableName/columns', requirePermission('can_edit'), (req, res) => {
     try {
         const { tableName } = req.params;
         const { name, type } = req.body;
         if (!name) return res.status(400).json({ error: '列名是必填项' });
         
-        const result = tableService.addColumn(tableName, name, type, req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        const result = tableService.addColumn(tableName, name, type, req.user.id, isAdmin);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -601,10 +621,12 @@ app.post('/api/tables/:tableName/columns', (req, res) => {
 });
 
 // 14. Delete Column
-app.delete('/api/tables/:tableName/columns/:columnName', (req, res) => {
+// Column deletion is considered an 'edit' operation, not a 'resource delete' operation.
+app.delete('/api/tables/:tableName/columns/:columnName', requirePermission('can_edit'), (req, res) => {
     try {
         const { tableName, columnName } = req.params;
-        const result = tableService.deleteColumn(tableName, columnName, req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        const result = tableService.deleteColumn(tableName, columnName, req.user.id, isAdmin);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
