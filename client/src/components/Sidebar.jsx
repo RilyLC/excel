@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Database, Plus, Trash2, Folder, FolderPlus, ChevronRight, ChevronDown, Pencil, Search, Settings } from 'lucide-react';
+import { Database, Plus, Trash2, Folder, FolderPlus, ChevronRight, ChevronDown, Pencil, Search, Settings, FileText } from 'lucide-react';
 
 export default function Sidebar({ 
     projects, 
@@ -44,7 +44,7 @@ export default function Sidebar({
                     }`}
                 >
                     <Folder size={14} className="text-slate-400" />
-                    全部表格
+                    全部
                 </button>
                 <button
                     onClick={() => onSelectProject({ id: 'uncategorized', name: '未分类' })}
@@ -97,7 +97,7 @@ export default function Sidebar({
       <div className="flex-1 flex flex-col min-h-0">
         <div className="px-4 py-3 flex items-center justify-between shrink-0">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 truncate max-w-[120px]" title={activeProject ? activeProject.name : '所有'}>
-                {activeProject ? activeProject.name : '所有'} 数据表
+                {activeProject ? activeProject.name : '所有'} 数据
             </span>
             <button 
                 onClick={onUploadClick}
@@ -114,7 +114,7 @@ export default function Sidebar({
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" size={12} />
                 <input 
                     type="text" 
-                    placeholder="搜索表格..." 
+                    placeholder="搜索文件..." 
                     className="w-full bg-slate-800 border-none rounded py-1 pl-7 pr-2 text-xs text-slate-300 focus:ring-1 focus:ring-blue-500 placeholder-slate-600"
                     value={tableSearch}
                     onChange={e => setTableSearch(e.target.value)}
@@ -135,7 +135,12 @@ export default function Sidebar({
                     }`}
                     title={table.name}
                 >
-                    <span className="truncate">{table.name}</span>
+                    {table.type === 'document' ? (
+                        <FileText size={16} className={ "text-orange-400"} />
+                    ) : (
+                        <Database size={16} className={ "text-blue-500"} />
+                    )}
+                    <span className="w-full truncate">{table.name}</span>
                 </button>
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button

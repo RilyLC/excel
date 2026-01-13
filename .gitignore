@@ -7,3 +7,4 @@
 /server/public
 /tmp-data/app.db
 server/data/app.db
+server/client/node_modules/

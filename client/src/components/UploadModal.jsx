@@ -50,9 +50,9 @@ export default function UploadModal({ isOpen, onClose, onUpload, projects = [], 
           <X size={20} />
         </button>
 
-        <h3 className="text-xl font-bold text-gray-900 mb-2">导入表格</h3>
+        <h3 className="text-xl font-bold text-gray-900 mb-2">导入数据</h3>
         <p className="text-sm text-gray-500 mb-4">
-          支持 .xlsx, .xls, .csv 格式。
+          支持 .xlsx, .xls, .csv, .docx, .txt 格式。
         </p>
 
         {/* Project Selection */}
@@ -81,7 +81,7 @@ export default function UploadModal({ isOpen, onClose, onUpload, projects = [], 
             type="file" 
             ref={fileInputRef}
             onChange={handleFileChange}
-            accept=".xlsx, .xls, .csv"
+            accept=".xlsx, .xls, .csv, .docx, .txt"
             className="hidden" 
           />
           
@@ -94,7 +94,7 @@ export default function UploadModal({ isOpen, onClose, onUpload, projects = [], 
             <div className="flex flex-col items-center gap-2 text-gray-600">
               <Upload size={32} className="text-blue-500" />
               <span className="text-sm font-medium">点击上传文件</span>
-              <span className="text-xs text-gray-400">支持 Excel / CSV</span>
+              <span className="text-xs text-gray-400">支持 Excel / CSV / Word / Txt</span>
             </div>
           )}
         </div>

@@ -15,7 +15,7 @@ const validateRegisterUsername = (value) => {
 const validateRegisterPassword = (value) => {
     const p = value || '';
     if (!p) return '密码是必填项';
-    if (!PASSWORD_REGEX.test(p)) return '密码格式不正确（8-64位，至少包含字母和数字，且不能包含空格）';
+    if (!PASSWORD_REGEX.test(p)) return '密码格式不正确（8-64位，至少包含字母和数字）';
     return '';
 };
 
@@ -128,7 +128,11 @@ const Login = ({ onSuccess }) => {
                             }}
                             placeholder="请输入用户名"
                             className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200"
-                        />
+                        />{!isLogin && (
+                            <div className="mt-1.5 text-xs text-gray-400 ml-1">
+                                2-20位，仅允许字母/数字/下划线
+                            </div>
+                        )}
                          {!isLogin && touched.username && fieldErrors.username && (
                             <div className="mt-1.5 text-xs text-red-500 ml-1">{fieldErrors.username}</div>
                         )}
@@ -156,7 +160,7 @@ const Login = ({ onSuccess }) => {
                         />
                          {!isLogin && (
                             <div className="mt-1.5 text-xs text-gray-400 ml-1">
-                                8-64位，含字母和数字，无空格
+                                8-64位，含字母和数字
                             </div>
                         )}
                         {!isLogin && touched.password && fieldErrors.password && (

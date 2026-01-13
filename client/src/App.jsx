@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useMemo,useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import DataGrid from './components/DataGrid';
 import UploadModal from './components/UploadModal';
@@ -7,8 +7,58 @@ import ConfirmModal from './components/ConfirmModal';
 import PromptModal from './components/PromptModal';
 import AlertModal from './components/AlertModal';
 import { api } from './api';
-import { Search, Loader2, Filter, Plus, Trash2, Download, Database as DatabaseIcon, LogOut, KeyRound } from 'lucide-react';
+import { 
+    Search, Loader2, Filter, Plus, Trash2, Download, Database as DatabaseIcon, 
+    LogOut, KeyRound, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown 
+} from 'lucide-react';
 import QueryBuilder from './components/QueryBuilder';
+import DocumentViewer from './components/DocumentViewer/DocumentViewer';
+
+// Helper for the custom select arrow
+const ChevronDownIconComponent = ({ className, size }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d="m6 9 6 6 6-6"/>
+    </svg>
+);
+
+const PageJumpInput = ({ currentPage, totalPages, onPageChange }) => {
+    const [val, setVal] = useState(currentPage);
+
+    useEffect(() => {
+        setVal(currentPage);
+    }, [currentPage]);
+
+    const handleCommit = () => {
+        let p = parseInt(val, 10);
+        if (Number.isNaN(p)) {
+            setVal(currentPage);
+            return;
+        }
+        const max = totalPages || 1;
+        if (p < 1) p = 1;
+        if (p > max) p = max;
+        
+        if (p !== currentPage) {
+            onPageChange(p);
+        } else {
+             setVal(currentPage);
+        }
+    };
+
+    return (
+        <div className="flex items-center text-gray-500 bg-gray-50 px-2 py-0.5 rounded text-xs border border-gray-200">
+             <span>第</span>
+             <input 
+                className="w-8 mx-1 text-center font-bold text-gray-800 bg-transparent border-b border-gray-300 hover:border-blue-400 focus:border-blue-500 focus:outline-none transition-colors appearance-none p-0"
+                value={val ?? ''}
+                onChange={e => setVal(e.target.value)}
+                onBlur={handleCommit}
+                onKeyDown={e => e.key === 'Enter' && handleCommit()}
+             />
+             <span>/ {totalPages || 1} 页</span>
+        </div>
+    );
+};
 
 const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d)[\S]{8,64}$/;
 
@@ -208,7 +258,7 @@ function App({ onLogout }) {
       }
       if (field === 'newPassword') {
           if (!v) return '新密码是必填项';
-          if (!PASSWORD_REGEX.test(v)) return '新密码格式不正确（8-64位，至少包含字母和数字，且不能包含空格）';
+          if (!PASSWORD_REGEX.test(v)) return '新密码格式不正确（8-64位，至少包含字母和数字）';
           return '';
       }
       if (field === 'confirmPassword') {
@@ -312,6 +362,8 @@ function App({ onLogout }) {
 
   // Search History State
   const [searchHistory, setSearchHistory] = useState([]);
+  const [searchPagination, setSearchPagination] = useState({ page: 1, pageSize: 5, total: 0, totalPages: 1 });
+
   const [showHistory, setShowHistory] = useState(false);
 
   // Load history on mount
@@ -492,16 +544,42 @@ function App({ onLogout }) {
     setActiveTable(table);
     setSearchResults(null); // Clear search mode
     setSearchQuery('');
-        setFocusRowId(null);
+    setFocusRowId(null);
     setFilters(initialFilters);
     setSorts([]);
     setGroups([]);
     setPagination({ page: 1, totalPages: 1, total: 0 });
-    loadTableData(table, 1, initialFilters, [], []);
+    
+    // Only load tabular data if it is NOT a document
+    if (table && table.type !== 'document') {
+        loadTableData(table, 1, initialFilters, [], []);
+    } else {
+        setTableData([]); // clear data for doc view
+    }
   };
 
+    const highlightTerms = useMemo(() => {
+        if (showAdvancedSearch) {
+             const getTerms = (group) => {
+                 let t = [];
+                 if(!group) return t;
+                 if(group.items) group.items.forEach(i => t.push(...getTerms(i)));
+                 else if(group.value && String(group.value).trim()) {
+                      // Optional: Filter by operator
+                      if(['=', '!=', 'LIKE', 'NOT LIKE'].includes(group.operator)) {
+                          t.push(String(group.value));
+                      }
+                 }
+                 return t;
+             };
+             return getTerms(advancedFilters).filter(Boolean);
+        } else {
+            return searchQuery.trim() ? [searchQuery.trim()] : [];
+        }
+    }, [showAdvancedSearch, advancedFilters, searchQuery]);
+
   // Handle Search
-  const handleSearch = async (e, overrideQuery) => {
+  const handleSearch = async (e, overrideQuery, page = 1, overridePageSize = null) => {
     e?.preventDefault();
 
     // If a query is provided (e.g., clicking history), use it immediately to avoid stale state.
@@ -518,11 +596,11 @@ function App({ onLogout }) {
         setSearchQuery(query);
     }
 
-    // Save to history if it's a text search
-    if (trimmedQuery) {
+    // Save to history if it's a text search (only in simple mode)
+    if (trimmedQuery && page === 1 && !showAdvancedSearch) { 
         saveSearchToHistory(trimmedQuery);
     }
-    setShowHistory(false); // Hide history dropdown
+    if(!showAdvancedSearch) setShowHistory(false); // Hide history dropdown in simple mode
 
     setIsSearching(true);
     try {
@@ -535,8 +613,33 @@ function App({ onLogout }) {
             projectScope = scopes;
         }
 
-        const res = await api.search(trimmedQuery, advancedFilters, projectScope);
-        setSearchResults(res.data);
+        const pageSize = overridePageSize || searchPagination.pageSize || 20;
+
+        // Mode Switching Logic:
+        // If Advanced Search is OPEN, we ONLY use advanced filters/scope and IGNORE text query.
+        // If Advanced Search is CLOSED, we ONLY use text query and IGNORE advanced filters/scope.
+        const activeQuery = showAdvancedSearch ? '' : trimmedQuery;
+        const activeFilters = showAdvancedSearch ? advancedFilters : null;
+        const activeScope = showAdvancedSearch ? projectScope : null;
+
+        const res = await api.search(activeQuery, activeFilters, activeScope, page, pageSize);
+        
+        // Handle new pagination response format
+        if (res.data && typeof res.data === 'object' && 'data' in res.data) {
+             setSearchResults(res.data.data);
+             setSearchPagination(prev => ({
+                 ...prev,
+                 pageSize: pageSize, // update pageSize in state if changed
+                 page: res.data.page,
+                 total: res.data.total,
+                 totalPages: res.data.totalPages || Math.ceil(res.data.total / pageSize)
+             }));
+        } else {
+             // Fallback for legacy array response (shouldn't happen if server updated)
+             setSearchResults(res.data);
+             setSearchPagination(prev => ({ ...prev, page: 1, total: res.data.length, totalPages: 1 }));
+        }
+
         setActiveTable(null); // Deselect table to show search results
     } catch (err) {
         console.error(err);
@@ -552,6 +655,11 @@ function App({ onLogout }) {
   const handleSearchResultClick = async (result, matchedRowId) => {
       const targetTable = tables.find(t => t.table_name === result.tableName);
       if (!targetTable) return;
+
+      if (targetTable.type === 'document') {
+          handleSelectTable(targetTable);
+          return;
+      }
 
       // If user clicked the table card (no specific row), just open the table.
       if (!matchedRowId) {
@@ -586,20 +694,30 @@ function App({ onLogout }) {
   };
 
   // Helper to render matching fields
-  const renderMatchingFields = (row, query) => {
-      const q = query.toLowerCase();
+  const renderMatchingFields = (row, terms) => {
+      // Ensure terms is an array
+      const termsArray = Array.isArray(terms) ? terms : [terms];
+      const validTerms = termsArray.filter(t => t && String(t).trim()).map(t => String(t).toLowerCase());
+      
       // Always include ID
       const fields = [{ key: 'id', value: row.id }];
       
       Object.entries(row).forEach(([key, value]) => {
           if (key === 'id' || key.startsWith('_')) return; // Skip ID (already added) and system fields
           const valStr = String(value);
-          if (valStr.toLowerCase().includes(q)) {
+          const valLower = valStr.toLowerCase();
+          
+          const isMatch = validTerms.length === 0 
+                ? true // If no terms (empty search), match everything? Or nothing? Usually everything implies just showing data.
+                : validTerms.some(term => valLower.includes(term));
+
+          if (isMatch) {
               fields.push({ key, value: valStr });
           }
       });
 
-      // If no other fields matched (unlikely if row was returned), show first 3 non-system fields
+      // If no MATCHING fields found (e.g. might be a hidden column matched or numeric operator > < etc)
+      // Show first 3 non-system fields as context
       if (fields.length === 1) {
           Object.entries(row).slice(0, 3).forEach(([key, value]) => {
               if (key !== 'id' && !key.startsWith('_')) {
@@ -741,23 +859,22 @@ function App({ onLogout }) {
                                         {searchHistory.map((term, idx) => (
                                             <div
                                                 key={idx}
-                                                className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-blue-50"
+                                                className="flex items-center justify-between px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 cursor-pointer group"
+                                                onMouseDown={(e) => {
+                                                    e.preventDefault(); // Prevent input blur
+                                                    handleSearch(null, term);
+                                                }}
                                             >
-                                                <button
-                                                    type="button"
-                                                    className="flex-1 text-left flex items-center gap-2"
-                                                    onMouseDown={() => {
-                                                        handleSearch(null, term); // Trigger search immediately with the clicked term
-                                                    }}
-                                                >
-                                                    <Search size={14} className="text-gray-400" />
+                                                <div className="flex items-center gap-2 flex-1 overflow-hidden">
+                                                    <Search size={14} className="text-gray-400 shrink-0" />
                                                     <span className="truncate">{term}</span>
-                                                </button>
+                                                </div>
                                                 <button
                                                     type="button"
-                                                    className="text-gray-400 hover:text-red-500"
+                                                    className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
                                                     title="删除这条记录"
                                                     onMouseDown={(e) => {
+                                                        e.preventDefault();
                                                         e.stopPropagation();
                                                         removeHistoryItem(term);
                                                     }}
@@ -882,7 +999,7 @@ function App({ onLogout }) {
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                           autoComplete="new-password"
                       />
-                      <div className="mt-1 text-xs text-gray-500">8-64位，至少包含字母和数字，且不能包含空格</div>
+                      <div className="mt-1 text-xs text-gray-500">8-64位，至少包含字母和数字</div>
                       {changePasswordTouched.newPassword && changePasswordErrors.newPassword && (
                           <div className="mt-1 text-xs text-red-600">{changePasswordErrors.newPassword}</div>
                       )}
@@ -916,7 +1033,7 @@ function App({ onLogout }) {
           {/* Advanced Search Panel */}
           {showAdvancedSearch && (
             <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 animate-in slide-in-from-top-2">
-                <div className="text-xs font-semibold text-gray-500 uppercase mb-2">全局搜索</div>
+                <div className="text-xs font-semibold text-gray-500 uppercase mb-2">高级搜索(仅支持表格)</div>
 
                 {/* Project Scope (multi-select) */}
                 <div className="mb-3">
@@ -1037,13 +1154,7 @@ function App({ onLogout }) {
                 <div className="h-full overflow-y-auto">
                     <div className="flex items-center justify-between gap-3 mb-4">
                         <h2 className="text-xl font-bold truncate">
-                            搜索结果: "{searchQuery}" 共{' '}
-                            <span className="font-semibold text-gray-900">
-                                {Array.isArray(searchResults)
-                                    ? searchResults.reduce((sum, group) => sum + (Number(group?.totalCount) || 0), 0)
-                                    : 0}
-                            </span>
-                            {' '}条记录
+                            搜索结果
                         </h2>
                     </div>
                     {searchResults.length === 0 ? (
@@ -1076,10 +1187,25 @@ function App({ onLogout }) {
                                     </h3>
                                     {group.matches.length > 0 ? (
                                         <div className="overflow-x-auto">
+                                            {group.type === 'document' ? (
+                                                <div className="text-sm p-2 bg-gray-50 rounded">
+                                                    {group.matches.map((match, mIdx) => (
+                                                        <div key={mIdx}>
+                                                            <span className="font-semibold text-gray-500 mr-2">匹配内容:</span>
+                                                            <span className="text-gray-700 italic" dangerouslySetInnerHTML={{
+                                                                __html: String(match.content).replace(
+                                                                    new RegExp(`(${highlightTerms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi'), 
+                                                                    '<span class="bg-yellow-200 text-black">$1</span>'
+                                                                )
+                                                            }} />
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
                                             <table className="w-full text-sm text-left">
                                                 <tbody>
                                                     {group.matches.map((row, rIdx) => {
-                                                        const fields = renderMatchingFields(row, searchQuery);
+                                                        const fields = renderMatchingFields(row, highlightTerms);
                                                         return (
                                                             <tr 
                                                                 key={rIdx} 
@@ -1094,7 +1220,7 @@ function App({ onLogout }) {
                                                                         <span className="font-semibold text-gray-500 mr-1">{field.key}:</span>
                                                                         <span dangerouslySetInnerHTML={{
                                                                             __html: String(field.value).replace(
-                                                                                new RegExp(`(${searchQuery})`, 'gi'), 
+                                                                                new RegExp(`(${highlightTerms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi'), 
                                                                                 '<span class="bg-yellow-200 text-black">$1</span>'
                                                                             )
                                                                         }} />
@@ -1105,19 +1231,113 @@ function App({ onLogout }) {
                                                     })}
                                                 </tbody>
                                             </table>
+                                            )}
                                         </div>
                                     ) : (
                                         <div className="text-sm text-gray-500 italic py-2">
-                                            仅表名或列名匹配，无内容匹配。
+                                            无内容匹配。
                                         </div>
                                     )}
                                 </div>
                             ))}
+                            
+                            {/* Pagination Controls */}
+                            {searchPagination.total > 0 && (
+                                <div className="p-2 px-4 border-t border-gray-200 bg-white flex items-center justify-between text-sm select-none shadow-[0_-2px_10px_rgba(0,0,0,0.02)] sticky bottom-0 z-10 w-full mt-4">
+                                    
+                                    {/* Left: Stats & Page Size */}
+                                    <div className="flex items-center gap-6 text-gray-500">
+                                         <div className="flex items-center gap-1.5">
+                                             <span className="font-medium text-gray-700">{searchPagination.total}</span>
+                                             <span>个匹配项</span>
+                                         </div>
+                                         
+                                         <div className="h-4 w-px bg-gray-200"></div>
+                                         
+                                         <div className="flex items-center gap-2 group cursor-pointer relative">
+                                             <span>每页显示</span>
+                                             <select 
+                                                className="appearance-none bg-transparent font-medium text-gray-700 py-0.5 pl-2 pr-6 border border-gray-200 rounded hover:border-blue-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer text-sm transition-colors"
+                                                value={searchPagination.pageSize}
+                                                onChange={(e) => {
+                                                    const val = Number(e.target.value);
+                                                    handleSearch(null, null, 1, val);
+                                                }}
+                                             >
+                                                 <option value={5}>5 条</option>
+                                                 <option value={10}>10 条</option>
+                                                 <option value={20}>20 条</option>
+                                                 <option value={50}>50 条</option>
+                                                 <option value={100}>100 条</option>
+                                             </select>
+                                             <ChevronDownIconComponent className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={12} />
+                                         </div>
+                                    </div>
+
+                                    {/* Right: Navigation */}
+                                    <div className="flex items-center gap-3">
+                                        <PageJumpInput 
+                                            currentPage={searchPagination.page} 
+                                            totalPages={searchPagination.totalPages} 
+                                            onPageChange={(p) => handleSearch(null, null, p)} 
+                                        />
+
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                onClick={() => handleSearch(null, null, 1)}
+                                                disabled={searchPagination.page <= 1}
+                                                className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                                title="第一页"
+                                            >
+                                                <ChevronsLeft size={16} />
+                                            </button>
+                                            <button
+                                                onClick={() => handleSearch(null, null, searchPagination.page - 1)}
+                                                disabled={searchPagination.page <= 1}
+                                                className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                                title="上一页"
+                                            >
+                                                <ChevronLeft size={16} />
+                                            </button>
+                                            
+                                            <div className="w-px h-4 bg-gray-200 mx-1"></div>
+
+                                            <button
+                                                onClick={() => handleSearch(null, null, searchPagination.page + 1)}
+                                                disabled={searchPagination.page >= searchPagination.totalPages}
+                                                className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                                title="下一页"
+                                            >
+                                                <ChevronRight size={16} />
+                                            </button>
+                                            <button
+                                                onClick={() => handleSearch(null, null, searchPagination.totalPages)}
+                                                disabled={searchPagination.page >= searchPagination.totalPages}
+                                                className="p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                                title="最后一页"
+                                            >
+                                                <ChevronsRight size={16} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
             ) : activeTable ? (
-                /* Case 3: Data Grid */
+                /* Case 3: Data Grid or Document Viewer */
+                activeTable.type === 'document' ? (
+                     <DocumentViewer 
+                        document={activeTable} 
+                        onClose={() => setActiveTable(null)} 
+                        onManage={() => {
+                            setManageTable(activeTable);
+                            setManageTableName(activeTable.name);
+                            setNewProjectForTable(activeTable.project_id || 'null');
+                        }}
+                     />
+                ) : (
                 <DataGrid 
                     tableMeta={activeTable}
                     data={tableData}
@@ -1151,11 +1371,12 @@ function App({ onLogout }) {
                         setNewProjectForTable(activeTable.project_id || 'null');
                     }}
                 />
+                )
             ) : (
                 /* Case 4: Empty State */
                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
                     <Database size={64} className="mb-4 text-gray-200" />
-                    <p className="text-lg">请选择一个表格或导入新文件以开始使用</p>
+                    <p className="text-lg">请选择或导入文件开始使用</p>
                 </div>
             )}
         </main>
@@ -1193,12 +1414,12 @@ function App({ onLogout }) {
         <Modal
             isOpen={true}
             onClose={() => setManageTable(null)}
-            title="管理表格"
+            title={manageTable.type === 'document' ? "管理文档" : "管理表格"}
             footer={
                 <div className="flex justify-between w-full">
                     <button 
                         onClick={() => {
-                            if (window.confirm('确定要删除这张表吗？')) {
+                            if (window.confirm(`确定要删除这个${manageTable.type === 'document' ? '文档' : '表格'}吗？`)) {
                                 api.deleteTable(manageTable.id).then(() => {
                                     if (activeTable?.id === manageTable.id) setActiveTable(null);
                                     setManageTable(null);
@@ -1208,7 +1429,7 @@ function App({ onLogout }) {
                         }}
                         className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
                     >
-                        删除表格
+                        {manageTable.type === 'document' ? "删除文档" : "删除表格"}
                     </button>
                     <div className="flex gap-2">
                         <button 
@@ -1229,13 +1450,13 @@ function App({ onLogout }) {
         >
              <div className="space-y-4">
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">表格名称</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{manageTable.type === 'document' ? "文档名称" : "表格名称"}</label>
                     <input 
                         type="text"
                         className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
                         value={manageTableName}
                         onChange={e => setManageTableName(e.target.value)}
-                        placeholder="请输入表格名称"
+                        placeholder={`请输入${manageTable.type === 'document' ? "文档" : "表格"}名称`}
                     />
                 </div>
                 <div>
@@ -1311,8 +1532,8 @@ function App({ onLogout }) {
                         onChange={e => setDeleteProjectWithTables(e.target.checked)}
                     />
                     <div className="text-sm">
-                        <span className="font-medium text-red-800">同时删除该项目下的所有表格</span>
-                        <p className="text-red-600 text-xs mt-0.5">如果不勾选，项目下的表格将移动到"未分类"。</p>
+                        <span className="font-medium text-red-800">同时删除该项目下的所有数据</span>
+                        <p className="text-red-600 text-xs mt-0.5">如果不勾选，项目下的数据将移动到"未分类"。</p>
                     </div>
                 </label>
             </div>

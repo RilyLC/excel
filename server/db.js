@@ -42,22 +42,16 @@ db.exec(`
     password TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS _document_index (
+    table_id INTEGER PRIMARY KEY,
+    content TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(table_id) REFERENCES _app_tables(id) ON DELETE CASCADE
+  );
 `);
 
-// Migration: Add user_id to existing tables if missing
-try {
-  const tableInfo = db.prepare('PRAGMA table_info(_app_tables)').all();
-  if (!tableInfo.find(c => c.name === 'user_id')) {
-     db.prepare('ALTER TABLE _app_tables ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE').run();
-  }
 
-  const projectInfo = db.prepare('PRAGMA table_info(projects)').all();
-  if (!projectInfo.find(c => c.name === 'user_id')) {
-     db.prepare('ALTER TABLE projects ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE').run();
-  }
-} catch (err) {
-  console.error('Migration failed:', err.message);
-}
 
 module.exports = db;
 

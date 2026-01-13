@@ -125,7 +125,7 @@ app.put('/api/tables/:id', (req, res) => {
 });
 
 // 2. Upload Excel
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: '请上传文件' });
     
@@ -133,7 +133,8 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     const originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     const projectId = req.body.projectId ? parseInt(req.body.projectId) : null;
     
-    const result = tableService.importExcel(req.file.buffer, originalname, projectId, req.user.id);
+    // Using await since importExcel is async now
+    const result = await tableService.importExcel(req.file.buffer, originalname, projectId, req.user.id);
     res.json(result);
   } catch (err) {
     console.error(err);
@@ -168,6 +169,20 @@ app.get('/api/tables/:tableName/data', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Document Content
+app.get('/api/documents/:id/content', (req, res) => {
+    try {
+        const { id } = req.params;
+        const { filePath, originalName } = tableService.getDocumentContent(id, req.user.id);
+        res.download(filePath, originalName);
+    } catch (err) {
+        if (err.message.includes('not found') || err.message.includes('not a document')) {
+            return res.status(404).json({ error: err.message });
+        }
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // 3.0.1 Get Table Aggregates
@@ -262,7 +277,7 @@ app.get('/api/tables/:tableName/export', (req, res) => {
 });
 
 // 8. Global Search
-app.get('/api/search', (req, res) => {
+app.get('/api/search', async (req, res) => {
     try {
         const query = req.query.q; // String search
         const filtersRaw = req.query.filters ? JSON.parse(req.query.filters) : null; // Advanced filters (array legacy or group object)
@@ -300,6 +315,19 @@ app.get('/api/search', (req, res) => {
             }
         }
 
+        // Pre-fetch document content matches (Optimization: 1 Query instead of N)
+        let docContentMap = new Map();
+        if (query) {
+            try {
+                const docMatches = db.prepare('SELECT table_id, content FROM _document_index WHERE content LIKE ?').all(`%${query}%`);
+                for (const row of docMatches) {
+                    docContentMap.set(row.table_id, row.content);
+                }
+            } catch (e) {
+                console.error('Document index search failed', e);
+            }
+        }
+
         const results = [];
 
         const legacyFiltersToGroup = (legacyFilters) => {
@@ -322,6 +350,41 @@ app.get('/api/search', (req, res) => {
             let matches = [];
             let matchReason = [];
             let totalMatches = 0;
+
+            // Handle Documents
+            if (table.type === 'document') {
+                // 0. Metadata Search (Filename)
+                if (query) {
+                    if (table.name.toLowerCase().includes(query.toLowerCase())) {
+                        matchReason.push('文档名匹配');
+                    }
+                    
+                    // 1. Content Search using Pre-fetched Index
+                    if (docContentMap.has(table.id)) {
+                        const content = docContentMap.get(table.id);
+                        const idx = content.toLowerCase().indexOf(query.toLowerCase());
+                        const start = Math.max(0, idx - 20);
+                        const end = Math.min(content.length, idx + query.length + 50);
+                        const snippet = content.substring(start, end);
+                        
+                        matches.push({ id: table.id, content: snippet + '...' });
+                        totalMatches = 1; 
+                        matchReason.push('文档内容匹配');
+                    }
+                }
+
+                if (matchReason.length > 0) {
+                     results.push({
+                        table: table.name,
+                        tableName: table.table_name, // used as ID
+                        matches: matches,
+                        matchReason: matchReason,
+                        totalCount: totalMatches,
+                        type: 'document' // Frontend can use this to render differntly
+                    });
+                }
+                continue;
+            }
 
             // 0. Metadata Search (Table Name & Column Names)
             if (query) {
@@ -440,11 +503,27 @@ app.get('/api/search', (req, res) => {
                     tableName: table.table_name,
                     matches: matches,
                     matchReason: matchReason,
-                    totalCount: totalMatches
+                    totalCount: totalMatches,
+                    type: table.type === 'document' ? 'document' : 'table'
                 });
             }
         }
-        res.json(results);
+        
+        // Results Pagination
+        const page = parseInt(req.query.page) || 1;
+        const pageSize = Math.max(1, parseInt(req.query.pageSize) || 20);
+        const offset = (page - 1) * pageSize;
+        
+        const total = results.length;
+        const pagedResults = results.slice(offset, offset + pageSize);
+        
+        res.json({
+            data: pagedResults,
+            total: total,
+            page: page,
+            pageSize: pageSize,
+            totalPages: Math.ceil(total / pageSize)
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

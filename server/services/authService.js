@@ -23,7 +23,7 @@ const validatePassword = (password) => {
     const p = String(password || '');
     if (!p) throw new Error('密码是必填项');
     if (!PASSWORD_REGEX.test(p)) {
-        throw new Error('密码格式不正确（8-64位，至少包含字母和数字，且不能包含空格）');
+        throw new Error('密码格式不正确（8-64位，至少包含字母和数字）');
     }
     return p;
 };

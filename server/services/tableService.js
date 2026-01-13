@@ -1,5 +1,15 @@
 const db = require('../db');
 const xlsx = require('xlsx');
+const fs = require('fs');
+const path = require('path');
+const mammoth = require('mammoth');
+
+// Ensure documents directory exists
+const dataDir = process.env.APP_DATA_DIR ? path.resolve(process.env.APP_DATA_DIR) : path.join(__dirname, '../data');
+const docsDir = path.join(dataDir, 'documents');
+if (!fs.existsSync(docsDir)) {
+    fs.mkdirSync(docsDir, { recursive: true });
+}
 
 // Helper to sanitize column names (SQLite identifiers)
 function sanitizeColumnName(name) {
@@ -70,9 +80,16 @@ exports.deleteProject = (id, deleteTables = false, userId) => {
 
         if (deleteTables) {
             // Find all tables in this project
-            const tables = db.prepare('SELECT id, table_name FROM _app_tables WHERE project_id = ?').all(id);
+            const tables = db.prepare('SELECT id, table_name, type, file_path FROM _app_tables WHERE project_id = ?').all(id);
             for (const table of tables) {
-                db.exec(`DROP TABLE IF EXISTS "${table.table_name}"`);
+                if (table.type === 'document' && table.file_path) {
+                    const filePath = path.join(docsDir, table.file_path);
+                    if (fs.existsSync(filePath)) {
+                        try { fs.unlinkSync(filePath); } catch(e) { console.error('Failed to delete file', e); }
+                    }
+                } else {
+                    db.exec(`DROP TABLE IF EXISTS "${table.table_name}"`);
+                }
             }
             db.prepare('DELETE FROM _app_tables WHERE project_id = ?').run(id);
         }
@@ -147,7 +164,48 @@ exports.updateTableMeta = (id, { name, projectId, columns }, userId) => {
     return { success: info.changes > 0 };
 };
 
-exports.importExcel = (buffer, originalFilename, projectId = null, userId) => {
+exports.importExcel = async (buffer, originalFilename, projectId = null, userId) => {
+  const ext = path.extname(originalFilename).toLowerCase();
+  
+  if (ext === '.docx' || ext === '.txt' || ext === '.csv') {
+      const name = originalFilename.replace(/\.[^/.]+$/, "");
+      const filename = `${Date.now()}_${Math.floor(Math.random() * 1000)}${ext}`;
+      const filePath = path.join(docsDir, filename);
+      
+      fs.writeFileSync(filePath, buffer);
+      
+      const pid = (projectId === 'null' || projectId === 'undefined' || projectId === '') ? null : projectId;
+      const tableName = generateUniqueTableName('doc');
+      
+      const insertMeta = db.prepare(`
+        INSERT INTO _app_tables (name, table_name, columns, project_id, user_id, type, file_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      
+      // We need the ID for indexing, run synchronously
+      const info = insertMeta.run(name, tableName, '[]', pid, userId, 'document', filename);
+      const tableId = info.lastInsertRowid;
+      
+      // --- Indexing for Search ---
+      try {
+          let content = '';
+          if (ext === '.txt' || ext === '.csv') {
+               content = buffer.toString('utf8');
+          } else if (ext === '.docx') {
+               const result = await mammoth.extractRawText({ buffer: buffer });
+               content = result.value;
+          }
+          
+          if (content) {
+              db.prepare('INSERT INTO _document_index (table_id, content) VALUES (?, ?)').run(tableId, content);
+          }
+      } catch (err) {
+          console.error("Failed to index document during upload:", err);
+      }
+      
+      return { tableName, type: 'document' };
+  }
+
   const workbook = xlsx.read(buffer, { type: 'buffer' });
   const sheetName = workbook.SheetNames[0]; // Import first sheet only for now
   const sheet = workbook.Sheets[sheetName];
@@ -485,11 +543,21 @@ exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId) 
 
 exports.deleteTable = (id, userId) => {
     // Verify ownership
-    const table = db.prepare('SELECT table_name FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+    const table = db.prepare('SELECT table_name, type, file_path FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
     if (!table) throw new Error('表未找到或没有权限');
 
     const dropTransaction = db.transaction(() => {
-        db.exec(`DROP TABLE IF EXISTS "${table.table_name}"`);
+        if (table.type === 'document' && table.file_path) {
+             const filePath = path.join(docsDir, table.file_path);
+             // 1. Delete File
+             if (fs.existsSync(filePath)) {
+                 try { fs.unlinkSync(filePath); } catch(e) { console.error('Failed to delete file', e); }
+             }
+             // 2. Delete Index
+             db.prepare('DELETE FROM _document_index WHERE table_id = ?').run(id);
+        } else {
+             db.exec(`DROP TABLE IF EXISTS "${table.table_name}"`);
+        }
         db.prepare('DELETE FROM _app_tables WHERE id = ?').run(id);
     });
     
@@ -559,7 +627,7 @@ const validateReadOnlySelect = (sql, userId) => {
     }
 
     // 2. System Tables Check
-    const systemTables = ['_app_tables', 'users', 'projects', 'sqlite_master', 'sqlite_sequence'];
+    const systemTables = ['_app_tables', '_document_index', 'users', 'projects', 'sqlite_master', 'sqlite_sequence'];
     const hasSystemTable = systemTables.some(tbl => {
         const pattern = new RegExp(`\\b${tbl}\\b|"${tbl}"`, 'i');
         return pattern.test(sql);
@@ -567,10 +635,9 @@ const validateReadOnlySelect = (sql, userId) => {
     if (hasSystemTable) throw new Error('禁止访问系统表。');
 
     // 4. User Isolation Check (Optimized: Allowlist approach)
-    // Extract potential table names (pattern t_<uuid> or hex) from SQL, supporting quoted identifiers
+    // Extract potential table names (pattern t_<uuid> or doc_<uuid> or hex) from SQL, supporting quoted identifiers
     // This avoids checking every single other user's table (O(N_total) -> O(N_my_tables))
-    // UUIDs contain hex and hyphens; randomBytes fallback produces hex only, so allow both.
-    const tableNamePattern = /(?:"(t_[0-9a-fA-F-]{6,})"|\b(t_[0-9a-fA-F-]{6,})\b)/g;
+    const tableNamePattern = /(?:"((?:t|doc)_[0-9a-fA-F-]{6,})"|\b((?:t|doc)_[0-9a-fA-F-]{6,})\b)/g;
     const matches = [];
     let m;
     while ((m = tableNamePattern.exec(sql)) !== null) {
@@ -578,8 +645,8 @@ const validateReadOnlySelect = (sql, userId) => {
     }
     
     if (matches.length > 0) {
-        // Get all tables owned by current user
-        const myTables = db.prepare('SELECT table_name FROM _app_tables WHERE user_id = ?').all(userId);
+        // Get all DATA TABLES owned by current user (exclude documents)
+        const myTables = db.prepare("SELECT table_name FROM _app_tables WHERE user_id = ? AND (type = 'table' OR type IS NULL)").all(userId);
         const myTableSet = new Set(myTables.map(t => t.table_name));
         
         const uniqueMatches = [...new Set(matches)]; // remove duplicates check
@@ -587,9 +654,9 @@ const validateReadOnlySelect = (sql, userId) => {
         for (const tbl of uniqueMatches) {
             // Verify if the referenced table is in my allowed list
             if (!myTableSet.has(tbl)) {
-                 // It's either someone else's table OR a non-existent table OR an unlucky alias collision
+                 // It's either someone else's table, a document (not a table), or non-existent
                  // In all cases, we block it for security.
-                throw new Error(`没有权限访问 '${tbl}' 或表不存在。`);
+                throw new Error(`没有权限访问 '${tbl}' 或表不存在`);
             }
         }
     }
@@ -813,3 +880,23 @@ exports.deleteColumn = (tableName, columnName, userId) => {
         return { success: true };
     })();
 };
+exports.getDocumentContent = (id, userId) => {
+    const table = db.prepare('SELECT file_path, name, type FROM _app_tables WHERE id = ? AND user_id = ?').get(id, userId);
+    if (!table) throw new Error('Document not found or access denied');
+    
+    if (table.type !== 'document' || !table.file_path) {
+        throw new Error('Requested resource is not a document');
+    }
+    
+    const filePath = path.join(docsDir, table.file_path);
+    if (!fs.existsSync(filePath)) {
+        throw new Error('File not found on server');
+    }
+    
+    return { 
+        filePath, 
+        originalName: table.name, 
+        ext: path.extname(table.file_path)
+    };
+};
+

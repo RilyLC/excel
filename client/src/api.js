@@ -58,12 +58,14 @@ export const api = {
   // - null/undefined => all projects
   // - 'uncategorized' or number/string => single scope (backward compatible)
   // - array => multiple scopes (e.g. ['uncategorized', '1', '2'])
-  search: (query, filters, projectScope) => client.get('/search', {
+  search: (query, filters, projectScope, page = 1, pageSize = 20) => client.get('/search', {
     params: {
       q: query,
       filters: JSON.stringify(filters || []),
       projectIds: Array.isArray(projectScope) ? JSON.stringify(projectScope) : undefined,
       projectId: !Array.isArray(projectScope) ? projectScope : undefined, // backward compatible
+      page,
+      pageSize
     }
   }),
 
@@ -87,4 +89,5 @@ export const api = {
   deleteRow: (tableName, rowId) => client.delete(`/tables/${tableName}/rows/${rowId}`),
   addColumn: (tableName, name, type) => client.post(`/tables/${tableName}/columns`, { name, type }),
   deleteColumn: (tableName, columnName) => client.delete(`/tables/${tableName}/columns/${columnName}`),
+  getDocumentContent: (id) => client.get(`/documents/${id}/content`, { responseType: 'blob' }),
 };
