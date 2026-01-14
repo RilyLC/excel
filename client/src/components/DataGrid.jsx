@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-table';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, Plus, Trash2, Download, Settings, ArrowUp, ArrowDown, ArrowUpDown, GripVertical, Eye, EyeOff, Layers, Calculator, Copy, Eraser, Columns, Rows } from 'lucide-react';
 import { api } from '../api';
+import { safeWriteToClipboard } from '../utils/clipboard';
 
 const SelectionContext = createContext(null);
 
@@ -880,7 +881,9 @@ export default function DataGrid({
           e.preventDefault();
           e.clipboardData.setData('text/plain', text);
       } else {
-          navigator.clipboard.writeText(text).then(() => {
+          safeWriteToClipboard(text).then(() => {
+              setContextMenu(null);
+          }).catch(() => {
               setContextMenu(null);
           });
       }
