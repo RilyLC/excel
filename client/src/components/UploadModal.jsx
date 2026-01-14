@@ -323,7 +323,7 @@ export default function UploadModal({ isOpen, onClose, onUpload, projects = [], 
                         <div className="space-y-3">
                             {tasks.map((task, index) => (
                                 <div key={task.id} className={`flex items-start gap-3 p-3 rounded-lg border ${task.status === 'error' ? 'bg-red-50 border-red-200' : task.status === 'success' ? 'bg-green-50 border-green-200' : task.status === 'skipped' ? 'bg-gray-50 border-gray-200 opacity-60' : 'bg-white border-gray-200 shadow-sm'}`}>
-                                    <div className="mt-2 text-gray-500">
+                                    <div className="mt-2 text-gray-500 ">
                                         {task.status === 'success' ? <CheckCircle size={18} className="text-green-500"/> :
                                          task.status === 'error' ? <AlertCircle size={18} className="text-red-500"/> :
                                          task.status === 'skipped' ? <AlertCircle size={18} className="text-gray-400"/> :
@@ -332,7 +332,7 @@ export default function UploadModal({ isOpen, onClose, onUpload, projects = [], 
                                     <div className="flex-1 space-y-2 min-w-0">
                                         <div className="flex items-center justify-between">
                                             <div className="text-xs text-gray-500 flex items-center gap-2">
-                                                <span className="font-medium text-gray-700">{task.file.name}</span>
+                                                <span className="font-medium text-gray-700 max-w-[270px] ">{task.file.name}</span>
                                                 {task.sheetName && <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded text-xs">Sheet: {task.sheetName}</span>}
                                                 {task.status === 'skipped' && <span className="bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded text-xs">已跳过</span>}
                                             </div>

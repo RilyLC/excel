@@ -385,16 +385,35 @@ exports.getAllTables = (projectId = null, userId, isAdmin = false) => {
 };
 
 // --- Shared WHERE Builder ---
-function buildWhereCondition(filterItem, params) {
+function buildWhereCondition(filterItem, params, columns) {
     // Case 1: Group (has 'items')
     if (filterItem.items && Array.isArray(filterItem.items) && filterItem.items.length > 0) {
-        const clauses = filterItem.items.map(item => buildWhereCondition(item, params)).filter(c => c);
+        const clauses = filterItem.items.map(item => buildWhereCondition(item, params, columns)).filter(c => c);
         if (clauses.length === 0) return '';
         return `(${clauses.join(` ${filterItem.logic || 'AND'} `)})`;
     }
     
     // Case 2: Condition (has 'column')
     if (filterItem.column) {
+        // Handle _ALL_ column
+        if (filterItem.column === '_ALL_') {
+             if (!columns || columns.length === 0) return '1=0';
+             const validOps = ['=', '!=', 'LIKE', 'NOT LIKE'];
+             const op = validOps.includes(filterItem.operator) ? filterItem.operator : 'LIKE';
+             
+             if (op === 'LIKE' || op === 'NOT LIKE') {
+                 params.push(`%${filterItem.value}%`);
+                 const colExpr = columns.map(c => `COALESCE(CAST("${c.name}" AS TEXT), '')`).join(" || ' ' || ");
+                 return `(${colExpr} ${op} ?)`;
+             } else {
+                 const parts = columns.map(c => {
+                     params.push(String(filterItem.value));
+                     return `CAST("${c.name}" AS TEXT) ${op} ?`; 
+                 });
+                 return `(${parts.join(' OR ')})`;
+             }
+        }
+
         const validOps = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'NOT LIKE', 'IS EMPTY', 'IS NOT EMPTY'];
         const op = validOps.includes(filterItem.operator) ? filterItem.operator : '=';
         
@@ -416,46 +435,53 @@ function buildWhereCondition(filterItem, params) {
     return '';
 }
 
-function buildWhereClause(filters, params) {
+function buildWhereClause(filters, params, columns) {
     let whereClause = '';
     // Support legacy flat array or new root group object
     if (Array.isArray(filters)) {
         if (filters.length > 0) {
              const conditions = filters.map((f, index) => {
-                 const validOps = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'NOT LIKE', 'IS EMPTY', 'IS NOT EMPTY'];
-                 const op = validOps.includes(f.operator) ? f.operator : '=';
+                 // Check default column logic inline here or refactor?
+                 // The previous implementation duplicated logic for array mode.
+                 // Let's reuse buildWhereCondition if possible, but buildWhereCondition handles Groups recursively.
+                 // Legacy flat list handling with implicit logic between items:
                  
-                 if (op === 'IS EMPTY') {
-                     const clause = `("${f.column}" IS NULL OR "${f.column}" = '')`;
-                     if (index > 0) {
-                         const logic = (f.logic === 'OR') ? 'OR' : 'AND';
-                         return ` ${logic} ${clause}`;
-                     }
-                     return clause;
+                 // Reuse buildWhereCondition logic for items? 
+                 // Actually, the legacy loop below duplicates logic. I should update it to support _ALL_ too.
+                 // Or better, convert legacy flat list to one Group and call buildWhereCondition.
+                 // But let's stick to minimal change pattern if possible, OR just duplicate the _ALL_ check.
+                 // Duplicating is ugly. Let's call buildWhereCondition.
+                 
+                 return buildWhereCondition(f, params, columns);
+            }).filter(c => c);
+            
+            // Re-join with logic from items (or default AND?)
+            // Legacy implementation: 
+            /*
+                 if (index > 0) {
+                     const logic = (f.logic === 'OR') ? 'OR' : 'AND';
+                     return ` ${logic} ${clause}`;
                  }
-                 if (op === 'IS NOT EMPTY') {
-                     const clause = `("${f.column}" IS NOT NULL AND "${f.column}" != '')`;
-                     if (index > 0) {
-                         const logic = (f.logic === 'OR') ? 'OR' : 'AND';
-                         return ` ${logic} ${clause}`;
-                     }
-                     return clause;
-                 }
-    
-                 if (op === 'LIKE' || op === 'NOT LIKE') params.push(`%${f.value}%`);
-                 else params.push(f.value);
-                 const clause = `"${f.column}" ${op} ?`;
+            */
+            // Since buildWhereCondition returns just the clause (no logic prefix), I have to handle logic joining here.
+            // But wait, the original code had `conditions.map` returning " logic clause".
+            
+            // Let's rewrite the legacy part to be safer.
+             const legacyConditions = filters.map((f, index) => {
+                 const clause = buildWhereCondition(f, params, columns);
+                 if (!clause) return '';
+                 
                  if (index > 0) {
                      const logic = (f.logic === 'OR') ? 'OR' : 'AND';
                      return ` ${logic} ${clause}`;
                  }
                  return clause;
             });
-            whereClause = `WHERE ${conditions.join('')}`;
+            whereClause = `WHERE ${legacyConditions.join('')}`;
         }
     } else if (typeof filters === 'object' && filters !== null) {
         // It's a root group
-        const sql = buildWhereCondition(filters, params);
+        const sql = buildWhereCondition(filters, params, columns);
         if (sql) whereClause = `WHERE ${sql}`;
     }
     return whereClause;
@@ -463,15 +489,21 @@ function buildWhereClause(filters, params) {
 
 exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts = [], groups = [], userId, isAdmin = false) => {
     // Verify tableName exists in _app_tables AND belongs to user
+    let tableMeta;
     if (!isAdmin) {
-        const tableExists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
-        if (!tableExists) {
+        tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+        if (!tableMeta) {
             throw new Error(`表 ${tableName} 未找到或没有权限`);
         }
     } else {
-         const exists = db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName);
-         if (!exists) throw new Error(`表 ${tableName} 未找到`);
+         tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ?').get(tableName);
+         if (!tableMeta) throw new Error(`表 ${tableName} 未找到`);
     }
+
+    let columns = [];
+    try {
+        columns = JSON.parse(tableMeta.columns);
+    } catch(e) { console.error('Error parsing columns', e); }
 
     // Check if _sort_order exists
     const hasSortOrder = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = '_sort_order'`).get(tableName);
@@ -480,7 +512,7 @@ exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts 
     const params = [];
 
     // --- 1. Build Recursive WHERE Clause ---
-    const whereClause = buildWhereClause(filters, params);
+    const whereClause = buildWhereClause(filters, params, columns);
 
     // --- 2. Build ORDER BY (Handling Groups as Primary Sort) ---
 
@@ -544,17 +576,25 @@ exports.getTableData = (tableName, page = 1, pageSize = 50, filters = [], sorts 
     };
 };
 exports.getTableAggregates = (tableName, filters = [], aggregates = {}, userId, isAdmin = false) => {
-    // Verify tableName exists
-    const tableExists = isAdmin
-        ? db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ?').get(tableName)
-        : db.prepare('SELECT 1 FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    // Verify tableName exists & fetch columns
+    let tableMeta;
+    if (isAdmin) {
+        tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ?').get(tableName);
+    } else {
+        tableMeta = db.prepare('SELECT columns FROM _app_tables WHERE table_name = ? AND user_id = ?').get(tableName, userId);
+    }
     
-    if (!tableExists) {
+    if (!tableMeta) {
         throw new Error(`表 ${tableName} 未找到或没有权限`);
     }
 
+    let columns = [];
+    try {
+        columns = JSON.parse(tableMeta.columns);
+    } catch(e) {}
+
     const params = [];
-    const whereClause = buildWhereClause(filters, params);
+    const whereClause = buildWhereClause(filters, params, columns);
     
     // Build Select Clause for Aggregates
     // aggregates: { columnName: 'SUM', otherColumn: 'AVG', ... }

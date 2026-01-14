@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useContext, createContext } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useContext, createContext, useCallback } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -695,28 +695,7 @@ export default function DataGrid({
       }
   };
 
-  const handleCopySelection = () => {
-      if (!selection.start || !selection.end) return;
 
-      const minRow = Math.min(selection.start.row, selection.end.row);
-      const maxRow = Math.max(selection.start.row, selection.end.row);
-      const minCol = Math.min(selection.start.col, selection.end.col);
-      const maxCol = Math.max(selection.start.col, selection.end.col);
-
-      const rows = table.getRowModel().rows.slice(minRow, maxRow + 1);
-      const text = rows.map(row => {
-          const cells = row.getVisibleCells().filter((_, idx) => idx >= minCol && idx <= maxCol);
-          return cells.map(cell => {
-              const val = cell.getValue();
-              return val === null ? '' : String(val);
-          }).join('\t');
-      }).join('\n');
-
-      navigator.clipboard.writeText(text).then(() => {
-          // Optional: show toast
-          setContextMenu(null);
-      });
-  };
 
   const handleDeleteSelectedRows = async () => {
       if (!tableMeta || !selection.start || !selection.end) return;
@@ -860,6 +839,57 @@ export default function DataGrid({
     columnResizeMode: 'onChange',
     defaultColumn: { size: 160, minSize: 80, maxSize: 600 },
   });
+
+  const handleCopySelection = useCallback((e) => {
+      if (!selection.start || !selection.end) return;
+      
+      // Keep default behavior if user is copying text inside an input
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+          const sel = window.getSelection();
+          if (sel && sel.toString().length > 0) {
+              return; 
+          }
+      }
+
+      const minRow = Math.min(selection.start.row, selection.end.row);
+      const maxRow = Math.max(selection.start.row, selection.end.row);
+      const minCol = Math.min(selection.start.col, selection.end.col);
+      const maxCol = Math.max(selection.start.col, selection.end.col);
+
+      const rows = table.getRowModel().rows.slice(minRow, maxRow + 1);
+
+      const escapeForExcel = (val) => {
+          if (val === null || val === undefined) return '';
+          const str = String(val);
+          if (str.includes('\t') || str.includes('\n') || str.includes('"')) {
+               return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+      };
+
+      const text = rows.map(row => {
+          const cells = row.getVisibleCells().filter((_, idx) => idx >= minCol && idx <= maxCol);
+          return cells.map(cell => {
+              const val = cell.getValue();
+              return escapeForExcel(val);
+          }).join('\t');
+      }).join('\n');
+
+      if (e && e.type === 'copy') {
+          e.preventDefault();
+          e.clipboardData.setData('text/plain', text);
+      } else {
+          navigator.clipboard.writeText(text).then(() => {
+              setContextMenu(null);
+          });
+      }
+  }, [selection, table]);
+
+  useEffect(() => {
+      document.addEventListener('copy', handleCopySelection);
+      return () => document.removeEventListener('copy', handleCopySelection);
+  }, [handleCopySelection]);
   
   // -- Quick Filter State (Legacy) --
   // We keep local `filters` state for the advanced panel.
@@ -1181,7 +1211,7 @@ export default function DataGrid({
                   return (
                     <th
                         key={header.id}
-                        className="px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider border-b border-gray-200 border-r border-gray-200 bg-gray-50 relative group/header"
+                        className={`px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider border-b border-gray-200 border-r border-gray-200 bg-gray-50 relative group/header ${isIndex ? 'sticky left-0 z-30 shadow-[1px_0_3px_rgba(0,0,0,0.05)]' : ''}`}
                         style={{ width: header.getSize() }}
                     >
                         <div className="flex items-center justify-between gap-2 h-full">
@@ -1301,7 +1331,7 @@ export default function DataGrid({
                                     return (
                                     <td
                                     key={cell.id}
-                                    className={`px-0 py-0 text-sm text-gray-700 whitespace-nowrap border-b border-gray-100 border-r border-gray-200 last:border-r-0 h-9 relative ${isSelected ? 'bg-blue-50 border-blue-200 z-10' : ''} ${isIndex ? 'bg-gray-50' : ''}`}
+                                    className={`px-0 py-0 text-sm text-gray-700 whitespace-nowrap border-b border-gray-100 border-r border-gray-200 last:border-r-0 h-9 relative ${isSelected ? 'bg-blue-50 border-blue-200 z-10' : ''} ${isIndex ? 'bg-gray-50 sticky left-0 z-20 shadow-[1px_0_3px_rgba(0,0,0,0.05)]' : ''}`}
                                     style={{ 
                                         width: cell.column.getSize(),
                                         borderRightColor: isSelected ? '#93c5fd' : null,
@@ -1339,7 +1369,7 @@ export default function DataGrid({
                {table.getVisibleLeafColumns().map((column, idx) => {
                    const isIndex = column.id === '_index';
                    if (isIndex) {
-                       return <td key={column.id} className="p-2 text-xs text-center text-gray-400 font-semibold bg-gray-50 border-r border-gray-200">统计</td>;
+                       return <td key={column.id} className="p-2 text-xs text-center text-gray-400 font-semibold bg-gray-50 border-r border-gray-200 sticky left-0 z-30 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">统计</td>;
                    }
                    
                    const colName = column.columnDef.accessorKey;

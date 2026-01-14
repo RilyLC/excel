@@ -439,6 +439,30 @@ app.get('/api/search', async (req, res) => {
 
                 // Case 2: Condition
                 if (filterItem.column) {
+                    // Start: Handle _ALL_ column (Fuzzy Search across all columns)
+                    if (filterItem.column === '_ALL_') {
+                        const validOps = ['=', '!=', 'LIKE', 'NOT LIKE'];
+                        const op = validOps.includes(filterItem.operator) ? filterItem.operator : 'LIKE';
+                        const val = filterItem.value;
+
+                        if (op === 'LIKE' || op === 'NOT LIKE') {
+                             // Concatenate all columns for fuzzy search
+                             const cols = table.columns.map(c => `COALESCE(CAST("${c.name}" AS TEXT), '')`).join(" || ' ' || ");
+                             params.push(`%${val}%`);
+                             return `(${cols} ${op} ?)`;
+                        } else {
+                             // Exact checks on any column (OR logic)
+                             const clauses = table.columns.map(c => {
+                                 // Handle potential type mismatch in SQL by casting to text for safety if flexible?
+                                 // But better to just check.
+                                 return `CAST("${c.name}" AS TEXT) ${op} ?`; 
+                             });
+                             clauses.forEach(() => params.push(String(val)));
+                             return `(${clauses.join(' OR ')})`;
+                        }
+                    }
+                    // End: Handle _ALL_ column
+
                     const hasColumn = table.columns.some(c => c.name === filterItem.column);
                     if (!hasColumn) return '1=0';
 
