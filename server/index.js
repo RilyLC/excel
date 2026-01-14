@@ -135,9 +135,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     // Fix filename encoding (latin1 -> utf8)
     const originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     const projectId = req.body.projectId ? parseInt(req.body.projectId) : null;
+    const sheetName = req.body.sheetName || null;
+    const customName = req.body.tableName || null;
+    const headerRowIndex = req.body.headerRowIndex ? parseInt(req.body.headerRowIndex) : 0;
     
     // Using await since importExcel is async now
-    const result = await tableService.importExcel(req.file.buffer, originalname, projectId, req.user.id);
+    const result = await tableService.importExcel(req.file.buffer, originalname, projectId, req.user.id, sheetName, customName, headerRowIndex);
     res.json(result);
   } catch (err) {
     console.error(err);

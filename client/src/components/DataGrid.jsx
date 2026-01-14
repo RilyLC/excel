@@ -577,6 +577,14 @@ export default function DataGrid({
       return rowIndex >= minRow && rowIndex <= maxRow && colIndex >= minCol && colIndex <= maxCol;
   };
 
+  const isRowSelected = (rowIndex) => {
+      if (!selection.start || !selection.end) return false;
+      const minRow = Math.min(selection.start.row, selection.end.row);
+      const maxRow = Math.max(selection.start.row, selection.end.row);
+
+      return rowIndex >= minRow && rowIndex <= maxRow;
+  };
+
   const [contextMenu, setContextMenu] = useState(null);
 
   useEffect(() => {
@@ -1273,15 +1281,17 @@ export default function DataGrid({
                         });
                     }
 
+                    const isSelectedRow = isRowSelected(rIdx);
+
                     return (
                         <React.Fragment key={row.id}>
                             {groupRows}
                             <tr
                                 data-row-id={row.original?.id}
-                                className={`hover:bg-blue-50 transition-colors group even:bg-gray-50/50 ${
+                                className={`hover:bg-blue-50 transition-colors group ${!isSelectedRow ? 'even:bg-gray-50/50' : ''} ${
                                     highlightRowId !== null && String(row.original?.id) === String(highlightRowId)
                                         ? 'bg-yellow-50 ring-2 ring-yellow-300'
-                                        : ''
+                                        : isSelectedRow ? 'bg-blue-50' : ''
                                 }`}
                             >
                                 {row.getVisibleCells().map((cell, cIdx) => {

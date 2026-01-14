@@ -195,11 +195,11 @@ exports.updateTableMeta = (id, { name, projectId, columns }, userId, isAdmin = f
     return { success: info.changes > 0 };
 };
 
-exports.importExcel = async (buffer, originalFilename, projectId = null, userId) => {
+exports.importExcel = async (buffer, originalFilename, projectId = null, userId, sheetNameParam = null, customNameParam = null, headerRowIndex = 0) => {
   const ext = path.extname(originalFilename).toLowerCase();
   
   if (ext === '.docx' || ext === '.txt' || ext === '.csv') {
-      const name = originalFilename.replace(/\.[^/.]+$/, "");
+      const name = customNameParam || originalFilename.replace(/\.[^/.]+$/, "");
       const filename = `${Date.now()}_${Math.floor(Math.random() * 1000)}${ext}`;
       const filePath = path.join(docsDir, filename);
       
@@ -238,13 +238,16 @@ exports.importExcel = async (buffer, originalFilename, projectId = null, userId)
   }
 
   const workbook = xlsx.read(buffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0]; // Import first sheet only for now
+  
+  let sheetName = sheetNameParam;
+  if (!sheetName || !workbook.SheetNames.includes(sheetName)) {
+      sheetName = workbook.SheetNames[0];
+  }
   const sheet = workbook.Sheets[sheetName];
   
   // Convert to JSON to get headers and data
-  // Use header: 1 to get array of arrays for CSV handling robustness, or stick to sheet_to_json
-  // For CSV/XLS compatibility, sheet_to_json works well if sheet is parsed correctly.
-  const data = xlsx.utils.sheet_to_json(sheet, { defval: null });
+  // Use range: headerRowIndex to skip lines
+  const data = xlsx.utils.sheet_to_json(sheet, { defval: null, range: headerRowIndex });
   
   if (data.length === 0) {
     throw new Error('表格为空');
@@ -311,8 +314,8 @@ exports.importExcel = async (buffer, originalFilename, projectId = null, userId)
     }
 
     // 3. Register in Meta Table
-    // Strip extension from filename for display name
-    const name = originalFilename.replace(/\.[^/.]+$/, "");
+    // Use customName if provided, otherwise strip extension
+    const name = customNameParam || originalFilename.replace(/\.[^/.]+$/, "");
     
     // Handle explicit null string or null value for projectId
     const pid = (projectId === 'null' || projectId === 'undefined' || projectId === '') ? null : projectId;
